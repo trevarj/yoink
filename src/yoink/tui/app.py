@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     DataTable,
@@ -40,6 +41,10 @@ def _fmt_ms(ms: int | None) -> str:
 
 
 class YoinkApp(App):
+    # Free C-n/C-p for emacs-style table navigation; the command palette moves
+    # to Ctrl+Shift+P (Textual defaults Ctrl+P to it).
+    COMMAND_PALETTE_BINDING = "ctrl+shift+p"
+
     CSS = """
     #search { dock: top; }
     #activity { dock: bottom; height: 1; color: $text-muted; background: $panel; }
@@ -59,6 +64,19 @@ class YoinkApp(App):
         ("r", "refresh", "Refresh"),
         ("b", "goto_browse", "Browse tab"),
         ("q", "goto_queue", "Queue tab"),
+        # Emacs-style table navigation. Hidden from the footer; Input already
+        # binds C-a/e/b/f so these only apply when a DataTable has focus.
+        Binding("ctrl+n", "emacs_down", show=False),
+        Binding("ctrl+p", "emacs_up", show=False),
+        Binding("ctrl+f", "emacs_right", show=False),
+        Binding("ctrl+b", "emacs_left", show=False),
+        Binding("ctrl+v", "emacs_page_down", show=False),
+        Binding("alt+v", "emacs_page_up", show=False),
+        Binding("ctrl+a", "emacs_home", show=False),
+        Binding("ctrl+e", "emacs_end", show=False),
+        Binding("alt+n", "next_tab", show=False),
+        Binding("alt+p", "prev_tab", show=False),
+        Binding("alt+q", "goto_queue", show=False),
     ]
 
     def __init__(self, config: Config) -> None:
@@ -353,6 +371,8 @@ class YoinkApp(App):
         self.query_one("#search", Input).focus()
 
     # --- tab navigation ---------------------------------------------------
+    _TABS = ("browse", "queue")
+
     def action_goto_browse(self) -> None:
         self.query_one(TabbedContent).active = "browse"
         self.query_one("#search", Input).focus()
@@ -360,3 +380,58 @@ class YoinkApp(App):
     def action_goto_queue(self) -> None:
         self.query_one(TabbedContent).active = "queue"
         self.action_refresh()
+
+    def _switch_tab(self, delta: int) -> None:
+        tc = self.query_one(TabbedContent)
+        cur = tc.active
+        try:
+            i = self._TABS.index(cur)
+        except ValueError:
+            i = 0
+        tc.active = self._TABS[(i + delta) % len(self._TABS)]
+        if tc.active == "browse":
+            self.query_one("#search", Input).focus()
+        else:
+            self.action_refresh()
+
+    def action_next_tab(self) -> None:
+        self._switch_tab(+1)
+
+    def action_prev_tab(self) -> None:
+        self._switch_tab(-1)
+
+    # --- emacs table navigation ------------------------------------------
+    # Forward to the focused DataTable's own (synchronous) cursor actions so the
+    # keys work only over tables; Input keeps its built-in emacs bindings.
+    def _dt(self, fn: str) -> None:
+        fw = self.focused
+        if isinstance(fw, DataTable):
+            getattr(fw, fn)()
+
+    def action_emacs_down(self) -> None:
+        self._dt("action_cursor_down")
+
+    def action_emacs_up(self) -> None:
+        self._dt("action_cursor_up")
+
+    def action_emacs_right(self) -> None:
+        self._dt("action_cursor_right")
+
+    def action_emacs_left(self) -> None:
+        self._dt("action_cursor_left")
+
+    def action_emacs_page_down(self) -> None:
+        self._dt("action_page_down")
+
+    def action_emacs_page_up(self) -> None:
+        self._dt("action_page_up")
+
+    def action_emacs_home(self) -> None:
+        fw = self.focused
+        if isinstance(fw, DataTable) and fw.row_count:
+            fw.move_cursor(row=0, animate=False)
+
+    def action_emacs_end(self) -> None:
+        fw = self.focused
+        if isinstance(fw, DataTable) and fw.row_count:
+            fw.move_cursor(row=fw.row_count - 1, animate=False)
