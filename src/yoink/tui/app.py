@@ -57,7 +57,8 @@ class YoinkApp(App):
         ("R", "requeue_album", "Requeue failed"),
         ("m", "resolve_track", "Resolve track"),
         ("r", "refresh", "Refresh"),
-        ("q", "quit", "Quit"),
+        ("b", "goto_browse", "Browse tab"),
+        ("q", "goto_queue", "Queue tab"),
     ]
 
     def __init__(self, config: Config) -> None:
@@ -350,3 +351,12 @@ class YoinkApp(App):
 
     def action_focus_search(self) -> None:
         self.query_one("#search", Input).focus()
+
+    # --- tab navigation ---------------------------------------------------
+    def action_goto_browse(self) -> None:
+        self.query_one(TabbedContent).active = "browse"
+        self.query_one("#search", Input).focus()
+
+    def action_goto_queue(self) -> None:
+        self.query_one(TabbedContent).active = "queue"
+        self.action_refresh()
