@@ -47,6 +47,10 @@ class Config:
     download_concurrency: int = 3
     # Preferred audio codec for extraction.
     audio_codec: str = "opus"
+    # Minimum audio bitrate (kbps) to accept a candidate; 0 disables the probe.
+    # Default on so low-bitrate reuploads are flagged for review rather than
+    # silently saved. The probe adds one extract_info round-trip per track.
+    min_audio_bitrate: float = 128.0
     # Tagging backend: "beets" (canonical library import) or "mutagen" (direct,
     # deterministic write of the known MusicBrainz metadata).
     tagger: str = "beets"
@@ -112,6 +116,7 @@ def load_config() -> Config:
         "min_match_score",
         "download_concurrency",
         "audio_codec",
+        "min_audio_bitrate",
         "tagger",
     ):
         if key in data:

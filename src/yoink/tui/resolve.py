@@ -58,9 +58,14 @@ class ResolveScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             reason = f"  ·  reason: {self.track.error}" if self.track.error else ""
+            br = (
+                f"  ·  {self.track.audio_bitrate:.0f}k"
+                if self.track.audio_bitrate
+                else ""
+            )
             yield Static(
                 f"Resolve: {self.track.artist} — {self.track.title}  "
-                f"[{_fmt(self.track.duration_ms)}]{reason}",
+                f"[{_fmt(self.track.duration_ms)}]{reason}{br}",
                 id="resolve_header",
             )
             yield DataTable(id="candidates", cursor_type="row", zebra_stripes=True)

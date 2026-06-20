@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS track_jobs (
   attempts INTEGER NOT NULL DEFAULT 0,
   error TEXT,
   manual_video_id TEXT,
+  audio_bitrate REAL,
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_track_status ON track_jobs(status);
@@ -110,6 +111,7 @@ class TrackJob:
     attempts: int
     error: str | None
     manual_video_id: str | None = None
+    audio_bitrate: float | None = None
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> TrackJob:
@@ -129,6 +131,7 @@ class TrackJob:
             attempts=r["attempts"],
             error=r["error"],
             manual_video_id=r["manual_video_id"],
+            audio_bitrate=r["audio_bitrate"],
         )
 
 
@@ -156,6 +159,8 @@ class Database:
             cols = {r["name"] for r in c.execute("PRAGMA table_info(track_jobs)")}
             if "manual_video_id" not in cols:
                 c.execute("ALTER TABLE track_jobs ADD COLUMN manual_video_id TEXT")
+            if "audio_bitrate" not in cols:
+                c.execute("ALTER TABLE track_jobs ADD COLUMN audio_bitrate REAL")
 
     # --- enqueue -----------------------------------------------------------
     def enqueue_release(self, release: Release) -> int | None:

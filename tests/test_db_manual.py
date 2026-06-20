@@ -64,3 +64,14 @@ def test_migration_adds_column_on_existing_db(tmp_path):
     cols = {r[1] for r in con.execute("PRAGMA table_info(track_jobs)")}
     con.close()
     assert "manual_video_id" in cols
+    assert "audio_bitrate" in cols
+
+
+def test_audio_bitrate_round_trips():
+    db = _db()
+    album_id = db.enqueue_release(REL)
+    t = db.list_tracks(album_id)[0]
+    assert db.get_track(t.id).audio_bitrate is None  # default
+    db.update_track(t.id, audio_bitrate=256.0)
+    got = db.get_track(t.id)
+    assert got.audio_bitrate == 256.0

@@ -15,6 +15,7 @@ renames into the final library tree.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import yt_dlp
@@ -29,6 +30,22 @@ _NON_AUDIO_SUFFIXES = {"webp", "jpg", "jpeg", "png", "part", "ytdl", "tmp"}
 
 class DownloadError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class AudioQuality:
+    """Best available audio stream for a video, without downloading it.
+
+    ``bitrate_kbps`` is None when it could not be measured -- callers must treat
+    that as "unknown" and proceed, never reject, so a good stream we can't read
+    the bitrate of isn't blocked.
+    """
+
+    video_id: str
+    bitrate_kbps: float | None
+    ext: str | None
+    acodec: str | None
+    filesize: int | None
 
 
 def _make_hook(cb: ProgressCb):
@@ -83,6 +100,45 @@ class Downloader:
         if progress_cb:
             opts["progress_hooks"] = [_make_hook(progress_cb)]
         return opts
+
+    def probe_audio(self, video_id: str) -> AudioQuality | None:
+        """Inspect the best audio stream without downloading.
+
+        Returns None on any failure (network / geo / parse) so callers never
+        crash on a probe; treat None as "unknown quality" (proceed, don't
+        reject).
+        """
+        opts = self._opts(None)
+        opts["skip_download"] = True
+        opts["quiet"] = True
+        url = f"https://music.youtube.com/watch?v={video_id}"
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except yt_dlp.utils.DownloadError:
+            return None
+        if not info:
+            return None
+        # Audio-only formats have vcodec == "none".
+        fmts = [f for f in info.get("formats", []) if f.get("vcodec") == "none"]
+        if not fmts:
+            # A single-format info dict is itself the audio format.
+            fmts = [info]
+
+        # YouTube routinely reports abr=None for opus; tbr is the trustworthy
+        # field for audio-only streams. Fall back to abr when tbr is absent.
+        def _br(f: dict) -> float:
+            return float(f.get("tbr") or f.get("abr") or 0)
+
+        best = max(fmts, key=_br)
+        br = _br(best)
+        return AudioQuality(
+            video_id=video_id,
+            bitrate_kbps=br or None,
+            ext=best.get("ext"),
+            acodec=best.get("acodec"),
+            filesize=best.get("filesize") or best.get("filesize_approx"),
+        )
 
     def download(self, video_id: str, progress_cb: ProgressCb | None = None) -> Path:
         """Download + extract one track. Returns the staged audio file path."""

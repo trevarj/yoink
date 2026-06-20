@@ -176,6 +176,28 @@ class Worker(threading.Thread):
             self._emit(row.id, None, f"needs review: {reason}")
             return
 
+        # Quality gate: reject low-bitrate sources into review rather than saving
+        # a bad file. Manual picks bypass the gate (explicit user choice). A
+        # probe that returns None (unmeasurable) proceeds without rejection.
+        if self.config.min_audio_bitrate > 0 and not row.manual_video_id:
+            q = self._dl.probe_audio(vid)
+            br = q.bitrate_kbps if q else None
+            if br is not None and br < self.config.min_audio_bitrate:
+                self.db.update_track(
+                    row.id,
+                    status=dbmod.TRACK_NEEDS_REVIEW,
+                    match_score=score,
+                    audio_bitrate=br,
+                    error=(
+                        f"low audio bitrate ({br:.0f}k < "
+                        f"{self.config.min_audio_bitrate:.0f}k)"
+                    ),
+                )
+                self._emit(row.id, None, f"needs review: low bitrate {br:.0f}k")
+                return
+            if br is not None:
+                self.db.update_track(row.id, audio_bitrate=br)
+
         self.db.update_track(
             row.id,
             status=dbmod.TRACK_DOWNLOADING,
