@@ -1,6 +1,6 @@
 [project]
 name = "yoink"
-version = "0.2.2"
+version = "0.2.3"
 description = "TUI music browser that crawls YouTube Music and yoinks full albums via yt-dlp"
 requires-python = ">=3.11"
 dependencies = [
