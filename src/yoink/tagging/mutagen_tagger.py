@@ -25,6 +25,23 @@ from ..models import Release, Track
 
 _RESERVED = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
 
+# A featured-guest join phrase, e.g. "Boys of Fall feat. Joey Fleming". The
+# separator must have whitespace on both sides so words like "Defeat" don't
+# match. Strips everything from the first feature marker onward.
+_FEATURE_RE = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+.*$", re.IGNORECASE)
+
+# Single-string fields a player groups on; the multi-value credit lists
+# (artists, artists_credit) are left alone so the guest stays credited.
+_GROUPING_FIELDS = ("artist", "artist_credit", "artistsort")
+
+
+def strip_featured(value: str) -> str:
+    """Drop the featured-guest portion: "A feat. B" -> "A", "A ft. B" -> "A".
+
+    Collaborations joined by " & " are preserved.
+    """
+    return _FEATURE_RE.sub("", value).strip()
+
 
 def safe(name: str, fallback: str = "Unknown") -> str:
     cleaned = _RESERVED.sub("_", name).strip().strip(".")
@@ -125,3 +142,32 @@ def place(
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(staged), str(dest))
     return dest
+
+
+def normalize_featured_artists(path: Path) -> None:
+    """Strip featured-guest artists from the track's grouping tag fields in place.
+
+    A track credited "A feat. B" gets its ``artist``/``artist_credit``/
+    ``artistsort`` set to "A" so a featured single doesn't split from its album
+    in a player. The multi-value credit lists (``artists``, ``artists_credit``)
+    and the album artist are untouched, so the guest stays credited. Best-effort:
+    missing tags or an unreadable file are silently skipped.
+    """
+    try:
+        audio = mutagen.File(path)
+    except Exception:
+        return
+    if audio is None or audio.tags is None:
+        return
+    changed = False
+    for key in _GROUPING_FIELDS:
+        values = audio.tags.get(key)
+        if not values:
+            continue
+        cleaned = [strip_featured(v) for v in values if isinstance(v, str)]
+        cleaned = [c for c in cleaned if c]
+        if cleaned and cleaned != list(values):
+            audio.tags[key] = cleaned
+            changed = True
+    if changed:
+        audio.save()

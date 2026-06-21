@@ -51,6 +51,9 @@ class Config:
     # Default on so low-bitrate reuploads are flagged for review rather than
     # silently saved. The probe adds one extract_info round-trip per track.
     min_audio_bitrate: float = 128.0
+    # Strip featured-guest artists ("feat.", "ft.", "featuring") from the track's
+    # artist tag so a featured single doesn't split from its album in a player.
+    strip_featured_artists: bool = True
     # Tagging backend: "beets" (canonical library import) or "mutagen" (direct,
     # deterministic write of the known MusicBrainz metadata).
     tagger: str = "beets"
@@ -117,6 +120,7 @@ def load_config() -> Config:
         "download_concurrency",
         "audio_codec",
         "min_audio_bitrate",
+        "strip_featured_artists",
         "tagger",
     ):
         if key in data:

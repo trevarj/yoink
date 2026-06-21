@@ -232,6 +232,7 @@ class Worker(threading.Thread):
                 final = mutagen_tagger.place(
                     staged, self.config.music_dir, release, track
                 )
+                self._maybe_strip_featured(final)
                 self.db.update_track(
                     row.id, status=dbmod.TRACK_DONE, final_path=str(final), error=None
                 )
@@ -262,6 +263,8 @@ class Worker(threading.Thread):
                 if tk
                 else None
             )
+            if final:
+                self._maybe_strip_featured(final)
             self.db.update_track(
                 t.id,
                 status=dbmod.TRACK_DONE,
@@ -277,6 +280,14 @@ class Worker(threading.Thread):
                 self.progress_cb(track_id, frac, status)
             except Exception:
                 pass
+
+    def _maybe_strip_featured(self, final: Path) -> None:
+        """Strip "feat." guests from the final file's grouping tags, if enabled."""
+        if self.config.strip_featured_artists:
+            try:
+                mutagen_tagger.normalize_featured_artists(final)
+            except Exception:
+                pass  # tagging is best-effort; never fail the track here
 
 
 def _staged_name(track: Track, ext: str) -> str:
