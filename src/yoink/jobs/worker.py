@@ -24,7 +24,7 @@ from rapidfuzz import fuzz
 from ..config import Config
 from ..metadata.musicbrainz import MusicBrainz
 from ..models import Release, Track
-from ..tagging import mutagen_tagger
+from ..tagging import mutagen_tagger, replaygain
 from ..tagging.beets_tagger import BeetsError, BeetsTagger
 from ..youtube.downloader import Downloader, DownloadError
 from ..youtube.matcher import best_match
@@ -119,6 +119,10 @@ class Worker(threading.Thread):
 
         if self._beets:
             self._finish_beets(album, album_dir)
+        elif self.config.replaygain:
+            # Mutagen path has no beets import to compute gain, so do it here:
+            # album-level R128 gain needs every track measured together.
+            self._normalize_album(album.id)
 
         self.db.recompute_album_status(album.id)
         if not self._beets and album_dir.exists():
@@ -337,6 +341,24 @@ class Worker(threading.Thread):
                 mutagen_tagger.normalize_featured_artists(final)
             except Exception:
                 pass  # tagging is best-effort; never fail the track here
+
+    def _normalize_album(self, album_id: int) -> None:
+        """Write R128 track + album gain tags across a finished album.
+
+        Only used on the mutagen path (beets computes its own via the plugin).
+        Best-effort: a measurement or tag-write failure never fails the album.
+        """
+        try:
+            paths = [
+                Path(t.final_path)
+                for t in self.db.list_tracks(album_id)
+                if t.status == dbmod.TRACK_DONE and t.final_path
+            ]
+            tagged = replaygain.normalize_album(paths)
+            if tagged:
+                self._emit(0, None, f"replaygain: tagged {tagged} track(s)")
+        except Exception as e:
+            self._emit(0, None, f"replaygain skipped: {e}")
 
 
 def _staged_name(track: Track, ext: str) -> str:

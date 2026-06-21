@@ -40,7 +40,7 @@ paths:
 
 # 'musicbrainz' is the metadata source plugin -- it must stay enabled or
 # --search-id has no resolver (beets defaults to it, but we override `plugins`).
-plugins: musicbrainz fromfilename
+plugins: musicbrainz fromfilename{replaygain_plugin}
 musicbrainz:
   searchlimit: 5
 
@@ -52,6 +52,20 @@ match:
   max_rec:
     missing_tracks: strong
     unmatched_tracks: strong
+{replaygain_block}"""
+
+# Appended to the `plugins:` line and dropped in as {replaygain_block} when the
+# feature is on. The ffmpeg backend needs no extra tool (yt-dlp already requires
+# ffmpeg); album_gain auto-computes album-level R128 gain during import.
+_REPLAYGAIN_PLUGIN = " replaygain"
+_REPLAYGAIN_BLOCK = """
+# ReplayGain via the ffmpeg (ebur128) backend -- tags only, no re-encode. Opus
+# gets R128_TRACK_GAIN / R128_ALBUM_GAIN; album gain is derived from all tracks.
+replaygain:
+  backend: ffmpeg
+  album_gain: auto
+  track_gain: auto
+  overwrite: no
 """
 
 
@@ -78,10 +92,13 @@ class BeetsTagger:
         self._write_config()
 
     def _write_config(self) -> None:
+        enabled = self.config.replaygain
         text = _CONFIG_TEMPLATE.format(
             music_dir=self.config.music_dir,
             library_db=self.beetsdir / "library.db",
             import_log=self.beetsdir / "import.log",
+            replaygain_plugin=_REPLAYGAIN_PLUGIN if enabled else "",
+            replaygain_block=_REPLAYGAIN_BLOCK if enabled else "",
         )
         (self.beetsdir / "config.yaml").write_text(text)
 

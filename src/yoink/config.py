@@ -54,6 +54,10 @@ class Config:
     # Strip featured-guest artists ("feat.", "ft.", "featuring") from the track's
     # artist tag so a featured single doesn't split from its album in a player.
     strip_featured_artists: bool = True
+    # Write ReplayGain (R128) track + album gain tags so an album's tracks play
+    # at a consistent volume. Non-destructive: tags only, no audio re-encode.
+    # Album gain is computed across all tracks at album-completion time.
+    replaygain: bool = True
     # Tagging backend: "beets" (canonical library import) or "mutagen" (direct,
     # deterministic write of the known MusicBrainz metadata).
     tagger: str = "beets"
@@ -121,6 +125,7 @@ def load_config() -> Config:
         "audio_codec",
         "min_audio_bitrate",
         "strip_featured_artists",
+        "replaygain",
         "tagger",
     ):
         if key in data:
