@@ -253,11 +253,19 @@ class Worker(threading.Thread):
             for t in tagged:
                 self.db.update_track(t.id, status=dbmod.TRACK_FAILED, error=str(e)[:500])
             return
-        # beets moved files into the library; predict their final paths.
+        # beets moves imported files out of album_dir. A staged file still present
+        # here was skipped -- typically a duplicate of an album beets already
+        # imported on a requeue (e.g. after manual resolve). Fall back to direct
+        # mutagen tagging so the track still lands in the library instead of being
+        # silently dropped while the DB claims it's done.
         release = self._mb.get_release(album.mb_release_id)  # cached
         by_pos = {(tk.disc, tk.position): tk for tk in release.tracks}
         for t in tagged:
             tk = by_pos.get((t.disc_no, t.track_no))
+            staged = Path(t.staging_path) if t.staging_path else None
+            if staged and staged.exists():
+                self._beets_skip_fallback(t, tk, release, album.id)
+                continue
             final = (
                 mutagen_tagger.final_path(self.config.music_dir, release, tk, ".opus")
                 if tk
@@ -273,6 +281,47 @@ class Worker(threading.Thread):
             )
             self._emit(t.id, 1.0, "done")
         shutil.rmtree(album_dir, ignore_errors=True)
+
+    def _beets_skip_fallback(
+        self, t: dbmod.TrackJob, tk: Track | None, release: Release, album_id: int
+    ) -> None:
+        """Tag + place a track beets skipped importing, using its staged file."""
+        staged = Path(t.staging_path) if t.staging_path else None
+        if not staged or not staged.exists():
+            self.db.update_track(
+                t.id,
+                status=dbmod.TRACK_FAILED,
+                error="beets skipped import; no staged file to fall back on",
+            )
+            return
+        if tk is None:
+            self.db.update_track(
+                t.id,
+                status=dbmod.TRACK_FAILED,
+                error="beets skipped import; no MB track mapping to tag with",
+            )
+            return
+        try:
+            final = mutagen_tagger.place(staged, self.config.music_dir, release, tk)
+            self._copy_album_cover(final, album_id, skip=final)
+            self._maybe_strip_featured(final)
+            self.db.update_track(
+                t.id, status=dbmod.TRACK_DONE, final_path=str(final), error=None
+            )
+            self._emit(t.id, 1.0, "done")
+        except Exception as e:
+            self.db.update_track(t.id, status=dbmod.TRACK_FAILED, error=str(e)[:500])
+
+    def _copy_album_cover(self, dest: Path, album_id: int, skip: Path) -> None:
+        """Copy embedded cover art from a done sibling track into ``dest``."""
+        for sib in self.db.list_tracks(album_id):
+            if sib.status != dbmod.TRACK_DONE or not sib.final_path:
+                continue
+            sp = Path(sib.final_path)
+            if not sp.exists() or sp == skip:
+                continue
+            if mutagen_tagger.embed_cover_from(dest, sp):
+                return
 
     def _emit(self, track_id: int, frac: float | None, status: str) -> None:
         if self.progress_cb:

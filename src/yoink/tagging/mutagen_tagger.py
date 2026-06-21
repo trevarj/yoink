@@ -171,3 +171,28 @@ def normalize_featured_artists(path: Path) -> None:
             changed = True
     if changed:
         audio.save()
+
+
+def embed_cover_from(dest: Path, src: Path) -> bool:
+    """Copy the embedded cover art tag from ``src`` to ``dest`` (best-effort).
+
+    Used when beets skips importing a track and we fall back to mutagen tagging,
+    so the fallback file gets the same cover art as its siblings. Returns True if
+    a cover was copied.
+    """
+    try:
+        source = mutagen.File(src)
+        target = mutagen.File(dest)
+    except Exception:
+        return False
+    if source is None or target is None or source.tags is None or target.tags is None:
+        return False
+    picture = source.tags.get("metadata_block_picture")
+    if not picture:
+        return False
+    try:
+        target.tags["metadata_block_picture"] = picture
+        target.save()
+        return True
+    except Exception:
+        return False
