@@ -41,7 +41,7 @@ def _setup(min_br: float, manual: str | None = None):
 
     worker = Worker(cfg, db)
 
-    calls: dict[str, list] = {"probe": [], "download": []}
+    calls: dict[str, list] = {"probe": [], "download": [], "art": []}
 
     def fake_resolve(track, album_match, index):
         return VID, 50.0, "matched"
@@ -66,6 +66,7 @@ def _setup(min_br: float, manual: str | None = None):
     import yoink.jobs.worker as wmod
 
     def fake_place(staged, music_dir, release, track, art=None):
+        calls["art"].append(art)
         dest = music_dir / "out.opus"
         return dest
 
@@ -75,8 +76,8 @@ def _setup(min_br: float, manual: str | None = None):
     return cfg, db, worker, row, album_dir, calls
 
 
-def _run(worker, db, row, album_dir):
-    worker._process_track(REL, REL.tracks[0], row, None, 0, album_dir)
+def _run(worker, db, row, album_dir, album_art=None):
+    worker._process_track(REL, REL.tracks[0], row, None, 0, album_dir, album_art)
     return db.get_track(row.id)
 
 
@@ -124,3 +125,11 @@ def test_manual_pick_bypasses_gate():
     assert t.status == dbmod.TRACK_DONE
     assert calls["probe"] == []  # gate skipped for manual picks
     assert calls["download"] == [VID]
+
+
+def test_album_art_is_passed_to_tagger():
+    cfg, db, worker, row, album_dir, calls = _setup(min_br=0.0)
+    art = object()
+    t = _run(worker, db, row, album_dir, album_art=art)
+    assert t.status == dbmod.TRACK_DONE
+    assert calls["art"] == [art]

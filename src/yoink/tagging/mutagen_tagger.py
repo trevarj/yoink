@@ -14,6 +14,7 @@ import base64
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 import mutagen
 from mutagen.flac import Picture
@@ -92,15 +93,36 @@ def _embed_vorbis_art(audio, art: bytes, mime: str) -> None:
     audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
 
 
-def write_tags(path: Path, release: Release, track: Track, art: bytes | None = None) -> None:
+def _art_payload(art: Any) -> tuple[bytes, str] | None:
+    if art is None:
+        return None
+    if isinstance(art, bytes):
+        return art, "image/jpeg"
+    data = getattr(art, "data", None)
+    mime = getattr(art, "mime", None)
+    if isinstance(data, bytes) and isinstance(mime, str):
+        return data, mime
+    raise TypeError("art must be bytes or an object with data and mime fields")
+
+
+def _mp4_cover_format(mime: str) -> int | None:
+    if mime == "image/png":
+        return MP4Cover.FORMAT_PNG
+    if mime in ("image/jpeg", "image/jpg"):
+        return MP4Cover.FORMAT_JPEG
+    return None
+
+
+def write_tags(path: Path, release: Release, track: Track, art: Any = None) -> None:
     """Overwrite the file's tags with authoritative MB metadata."""
+    cover = _art_payload(art)
     suffix = path.suffix.lower()
     if suffix in (".opus", ".ogg"):
         audio = OggOpus(path) if suffix == ".opus" else OggVorbis(path)
         for k, v in _vorbis_tags(release, track).items():
             audio[k] = v
-        if art:
-            _embed_vorbis_art(audio, art, "image/jpeg")
+        if cover:
+            _embed_vorbis_art(audio, cover[0], cover[1])
         audio.save()
     elif suffix in (".m4a", ".mp4", ".aac"):
         audio = MP4(path)
@@ -113,8 +135,10 @@ def write_tags(path: Path, release: Release, track: Track, art: bytes | None = N
         audio["disk"] = [(track.disc, 0)]
         if release.date:
             audio["\xa9day"] = release.date
-        if art:
-            audio["covr"] = [MP4Cover(art, imageformat=MP4Cover.FORMAT_JPEG)]
+        if cover:
+            imageformat = _mp4_cover_format(cover[1])
+            if imageformat is not None:
+                audio["covr"] = [MP4Cover(cover[0], imageformat=imageformat)]
         audio.save()
     else:
         # Best-effort generic write (mp3 etc.) via mutagen's easy interface.
@@ -134,7 +158,7 @@ def place(
     music_dir: Path,
     release: Release,
     track: Track,
-    art: bytes | None = None,
+    art: Any = None,
 ) -> Path:
     """Tag the staged file and move it to its final library path."""
     write_tags(staged, release, track, art)

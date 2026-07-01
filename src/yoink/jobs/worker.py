@@ -22,6 +22,7 @@ from pathlib import Path
 from rapidfuzz import fuzz
 
 from ..config import Config
+from ..metadata.coverart import CoverArtArchive
 from ..metadata.musicbrainz import MusicBrainz
 from ..models import Release, Track
 from ..tagging import mutagen_tagger, replaygain
@@ -55,6 +56,7 @@ class Worker(threading.Thread):
         self._stop = threading.Event()
         self._yt_lock = threading.Lock()  # serialize shared ytmusicapi searches
         self._mb = MusicBrainz(config)
+        self._art = CoverArtArchive(config)
         self._yt = YouTubeMusic()
         self._dl = Downloader(config)
         self._beets = BeetsTagger(config) if config.tagger == "beets" else None
@@ -80,6 +82,7 @@ class Worker(threading.Thread):
             self.db.set_album_status(album.id, dbmod.ALBUM_FAILED)
             return
         release = self._mb.get_release(album.mb_release_id)
+        album_art = self._art.front_cover(release.mbid)
         self.db.set_album_status(album.id, dbmod.ALBUM_DOWNLOADING)
 
         # Try the album-as-playlist path for clean, aligned videoIds.
@@ -103,12 +106,23 @@ class Worker(threading.Thread):
             for i, track in enumerate(release.tracks)
         ]
         pending = [
-            (i, t, r) for (i, t, r) in pending if r is not None and r.status != dbmod.TRACK_DONE
+            (i, t, r)
+            for (i, t, r) in pending
+            if r is not None and r.status != dbmod.TRACK_DONE
         ]
         workers = max(1, self.config.download_concurrency)
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futures = [
-                ex.submit(self._process_track, release, t, r, album_match, i, album_dir)
+                ex.submit(
+                    self._process_track,
+                    release,
+                    t,
+                    r,
+                    album_match,
+                    i,
+                    album_dir,
+                    album_art,
+                )
                 for (i, t, r) in pending
             ]
             for f in as_completed(futures):
@@ -164,6 +178,7 @@ class Worker(threading.Thread):
         album_match,
         index: int,
         album_dir: Path,
+        album_art=None,
     ) -> None:
         if self._stop.is_set():
             return
@@ -223,10 +238,11 @@ class Worker(threading.Thread):
             self.db.update_track(row.id, status=status, error=str(e)[:500])
             return
 
-        # Pre-tag with authoritative metadata (keeps embedded YT cover art).
+        # Pre-tag with authoritative metadata and replace YouTube thumbnails
+        # with MusicBrainz-linked cover art when the archive has it.
         try:
             if self._beets:
-                mutagen_tagger.write_tags(staged, release, track)
+                mutagen_tagger.write_tags(staged, release, track, album_art)
                 dest = album_dir / _staged_name(track, staged.suffix)
                 shutil.move(str(staged), str(dest))
                 self.db.update_track(
@@ -234,7 +250,7 @@ class Worker(threading.Thread):
                 )
             else:
                 final = mutagen_tagger.place(
-                    staged, self.config.music_dir, release, track
+                    staged, self.config.music_dir, release, track, album_art
                 )
                 self._maybe_strip_featured(final)
                 self.db.update_track(
