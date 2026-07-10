@@ -1,0 +1,254 @@
+$ink: #e6edf3;
+$muted: #8290a3;
+$canvas: #0a0e14;
+$surface: #111823;
+$raised: #172130;
+$line: #263448;
+$aqua: #67d4e8;
+$violet: #a99cff;
+$amber: #f4c95d;
+
+Screen {
+    background: $canvas;
+    color: $ink;
+}
+
+Header {
+    height: 3;
+    background: $surface;
+    color: $ink;
+    border-bottom: solid $line;
+}
+
+Header .header--title {
+    color: $aqua;
+    text-style: bold;
+}
+
+TabbedContent {
+    height: 1fr;
+    background: $canvas;
+}
+
+ContentSwitcher {
+    background: $canvas;
+}
+
+Tabs {
+    height: 3;
+    background: $surface;
+    border-bottom: solid $line;
+    padding-left: 2;
+}
+
+Tab {
+    width: auto;
+    min-width: 16;
+    padding: 0 3;
+    color: $muted;
+}
+
+Tab:hover {
+    color: $ink;
+    background: $raised;
+}
+
+Tab.-active {
+    color: $aqua;
+    background: $surface;
+    text-style: bold;
+}
+
+.page {
+    padding: 1 2;
+    background: $canvas;
+}
+
+#search_panel {
+    height: 6;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.eyebrow {
+    height: 1;
+    color: $aqua;
+    text-style: bold;
+}
+
+.quiet {
+    color: $muted;
+}
+
+.hint {
+    height: 1;
+    padding-left: 2;
+}
+
+Input {
+    height: 3;
+    border: tall $line;
+    background: $surface;
+    color: $ink;
+    padding: 0 1;
+}
+
+Input:focus {
+    border: tall $aqua;
+    background: $raised;
+}
+
+Input > .input--placeholder {
+    color: $muted;
+}
+
+#browse_body, #queue_body {
+    height: 1fr;
+}
+
+.pane {
+    height: 1fr;
+    background: $surface;
+    border: solid $line;
+    padding: 1;
+}
+
+.pane:focus-within {
+    border: solid $aqua 40%;
+}
+
+#catalog_pane {
+    width: 60%;
+    margin-right: 1;
+}
+
+#preview_pane {
+    width: 40%;
+}
+
+.section_heading {
+    height: 2;
+    padding: 0 1;
+}
+
+.section_heading > .section_title {
+    width: 1fr;
+    text-style: bold;
+    color: $ink;
+}
+
+.section_heading > .quiet {
+    width: auto;
+    text-align: right;
+}
+
+#preview_header, #queue_detail {
+    height: auto;
+    min-height: 3;
+    padding: 1;
+    margin-bottom: 1;
+    background: $raised;
+    border-left: thick $violet;
+    color: $ink;
+}
+
+DataTable {
+    height: 1fr;
+    background: $surface;
+    color: $ink;
+    scrollbar-color: $line;
+    scrollbar-color-hover: $muted;
+    scrollbar-color-active: $aqua;
+}
+
+DataTable > .datatable--header {
+    background: $raised;
+    color: $muted;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #23364a;
+    color: #ffffff;
+    text-style: bold;
+}
+
+DataTable > .datatable--hover {
+    background: #1c2938;
+}
+
+DataTable > .datatable--odd-row {
+    background: #0f1620;
+}
+
+#queue_overview {
+    height: 5;
+    margin-bottom: 1;
+}
+
+.metric {
+    width: 1fr;
+    height: 5;
+    margin-right: 1;
+    padding: 1 2;
+    background: $surface;
+    border: solid $line;
+    color: $aqua;
+}
+
+.metric:last-child {
+    margin-right: 0;
+}
+
+.warning_metric {
+    color: $amber;
+}
+
+#albums_pane {
+    width: 44%;
+    margin-right: 1;
+}
+
+#tracks_pane {
+    width: 56%;
+}
+
+#activity_bar {
+    height: 2;
+    padding: 0 2;
+    background: $raised;
+    border-top: solid $line;
+    color: $muted;
+}
+
+#activity_indicator {
+    width: 2;
+    color: $aqua;
+}
+
+#activity {
+    width: 1fr;
+}
+
+#nav_hint {
+    width: auto;
+    color: $muted;
+    text-align: right;
+}
+
+Footer {
+    height: 2;
+    background: $surface;
+    color: $muted;
+}
+
+Footer .footer--key {
+    color: $canvas;
+    background: $aqua;
+    text-style: bold;
+}
+
+Footer .footer--description {
+    color: $muted;
+    background: $surface;
+}

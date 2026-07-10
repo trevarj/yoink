@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from beets.library import Library
+
 from ..config import Config
 
 _CONFIG_TEMPLATE = """\
@@ -132,3 +134,25 @@ class BeetsTagger:
         if proc.returncode != 0:
             raise BeetsError(f"beet import failed ({proc.returncode}):\n{out}")
         return out
+
+    def paths_for_release(self, mb_release_id: str) -> dict[tuple[int, int], Path]:
+        """Return actual imported paths keyed by ``(disc, track)``.
+
+        Querying the isolated beets library avoids guessing its path template or
+        assuming the configured extraction codec produced an ``.opus`` file.
+        """
+        try:
+            library = Library(str(self.beetsdir / "library.db"))
+            items = library.items(f"mb_albumid:{mb_release_id}")
+            paths: dict[tuple[int, int], Path] = {}
+            for item in items:
+                try:
+                    key = (int(item.disc or 1), int(item.track))
+                    path = Path(os.fsdecode(item.path))
+                except (TypeError, ValueError):
+                    continue
+                if path.exists():
+                    paths[key] = path
+            return paths
+        except Exception as e:
+            raise BeetsError(f"could not read imported paths from beets: {e}") from e

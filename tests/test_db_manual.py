@@ -61,10 +61,12 @@ def test_migration_adds_column_on_existing_db(tmp_path):
 
     Database(path)  # triggers migration
     con = sqlite3.connect(path)
-    cols = {r[1] for r in con.execute("PRAGMA table_info(track_jobs)")}
+    track_cols = {r[1] for r in con.execute("PRAGMA table_info(track_jobs)")}
+    album_cols = {r[1] for r in con.execute("PRAGMA table_info(album_jobs)")}
     con.close()
-    assert "manual_video_id" in cols
-    assert "audio_bitrate" in cols
+    assert "manual_video_id" in track_cols
+    assert "audio_bitrate" in track_cols
+    assert "error" in album_cols
 
 
 def test_audio_bitrate_round_trips():

@@ -28,8 +28,23 @@ min_match_score = 6.0
 # Number of tracks downloaded in parallel within an album.
 download_concurrency = 3
 
+# Reject automatically matched sources below this bitrate in kbps. Set to 0 to
+# disable the quality probe.
+min_audio_bitrate = 128.0
+
+# Normalize grouping tags by removing "feat." guests from track artists.
+strip_featured_artists = true
+
+# Write non-destructive R128 track and true integrated album loudness tags.
+replaygain = true
+
 # Library output directory (defaults to $XDG_MUSIC_DIR or ~/Music).
 # music_dir = "/home/you/Music"
+
+# Durable queue/beets state and disposable metadata/art caches. Defaults follow
+# $XDG_STATE_HOME/yoink and $XDG_CACHE_HOME/yoink respectively.
+# state_dir = "/home/you/.local/state/yoink"
+# cache_dir = "/home/you/.cache/yoink"
 """
 
 
@@ -60,7 +75,10 @@ def main() -> None:
         _write_config()
         return
 
-    config = load_config()
+    try:
+        config = load_config()
+    except (OSError, ValueError) as e:
+        parser.error(f"invalid configuration: {e}")
     config.ensure_dirs()
     # Import lazily so --version / --write-config don't pull in Textual.
     from .tui.app import YoinkApp

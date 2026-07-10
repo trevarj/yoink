@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import yt_dlp
 
@@ -34,7 +35,7 @@ class DownloadError(Exception):
 
 @dataclass(frozen=True)
 class AudioQuality:
-    """Best available audio stream for a video, without downloading it.
+    """Audio stream selected by the downloader, without downloading it.
 
     ``bitrate_kbps`` is None when it could not be measured -- callers must treat
     that as "unknown" and proceed, never reject, so a good stream we can't read
@@ -68,11 +69,13 @@ class Downloader:
         self.codec = config.audio_codec
         self.staging.mkdir(parents=True, exist_ok=True)
 
-    def _opts(self, progress_cb: ProgressCb | None) -> dict:
+    def _opts(
+        self, progress_cb: ProgressCb | None, output_stem: str = "%(id)s"
+    ) -> dict:
         opts: dict = {
             "format": "bestaudio/best",
             "format_sort": [f"acodec:{self.codec}", "abr"],
-            "outtmpl": {"default": str(self.staging / "%(id)s.%(ext)s")},
+            "outtmpl": {"default": str(self.staging / f"{output_stem}.%(ext)s")},
             "writethumbnail": True,
             "quiet": True,
             "no_warnings": True,
@@ -119,18 +122,25 @@ class Downloader:
             return None
         if not info:
             return None
-        # Audio-only formats have vcodec == "none".
-        fmts = [f for f in info.get("formats", []) if f.get("vcodec") == "none"]
-        if not fmts:
-            # A single-format info dict is itself the audio format.
-            fmts = [info]
-
         # YouTube routinely reports abr=None for opus; tbr is the trustworthy
         # field for audio-only streams. Fall back to abr when tbr is absent.
         def _br(f: dict) -> float:
             return float(f.get("tbr") or f.get("abr") or 0)
 
-        best = max(fmts, key=_br)
+        # ``extract_info`` processes the configured format selector even with
+        # download=False and overlays the selected format onto the top-level
+        # info dict. Inspect that selection instead of independently picking
+        # the highest bitrate, which may be a different codec than download().
+        if info.get("format_id") and info.get("acodec") != "none":
+            best = info
+        else:
+            # Unit-test/simple-extractor fallback: mirror our codec-first sort,
+            # then choose the highest bitrate within that codec.
+            fmts = [f for f in info.get("formats", []) if f.get("vcodec") == "none"]
+            if not fmts:
+                fmts = [info]
+            preferred = [f for f in fmts if f.get("acodec") == self.codec]
+            best = max(preferred or fmts, key=_br)
         br = _br(best)
         return AudioQuality(
             video_id=video_id,
@@ -143,21 +153,25 @@ class Downloader:
     def download(self, video_id: str, progress_cb: ProgressCb | None = None) -> Path:
         """Download + extract one track. Returns the staged audio file path."""
         url = f"https://music.youtube.com/watch?v={video_id}"
+        # Multiple album tracks can intentionally resolve to one video. Give
+        # every invocation its own files (including thumbnail/temporary files)
+        # so concurrent yt-dlp postprocessing cannot overwrite a sibling.
+        output_stem = f"{video_id}-{uuid4().hex}"
         try:
-            with yt_dlp.YoutubeDL(self._opts(progress_cb)) as ydl:
+            with yt_dlp.YoutubeDL(self._opts(progress_cb, output_stem)) as ydl:
                 rc = ydl.download([url])
         except yt_dlp.utils.DownloadError as e:  # network / unavailable / geo
             raise DownloadError(str(e)) from e
         if rc != 0:
             raise DownloadError(f"yt-dlp returned {rc} for {video_id}")
-        return self._locate(video_id)
+        return self._locate(output_stem)
 
-    def _locate(self, video_id: str) -> Path:
-        preferred = self.staging / f"{video_id}.{self.codec}"
+    def _locate(self, output_stem: str) -> Path:
+        preferred = self.staging / f"{output_stem}.{self.codec}"
         if preferred.exists():
             return preferred
         # Codec may differ if the preferred stream wasn't available.
-        for m in sorted(self.staging.glob(f"{video_id}.*")):
+        for m in sorted(self.staging.glob(f"{output_stem}.*")):
             if m.suffix.lstrip(".").lower() not in _NON_AUDIO_SUFFIXES:
                 return m
-        raise DownloadError(f"no output audio file produced for {video_id}")
+        raise DownloadError(f"no output audio file produced for {output_stem}")

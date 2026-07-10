@@ -40,12 +40,34 @@ def test_r128_q78_clamps_to_int16_range():
     assert replaygain.r128_q78(-300.0) == (1 << 15) - 1  # absurdly quiet -> max boost
 
 
-def test_album_loudness_is_mean():
-    assert replaygain.album_loudness([-20.0, -24.0]) == pytest.approx(-22.0)
+def test_normalize_album_uses_integrated_album_measurement(monkeypatch, tmp_path: Path):
+    paths = [tmp_path / "quiet.opus", tmp_path / "loud.opus"]
+    track_loudness = dict(zip(paths, (-30.0, -10.0), strict=True))
+    written = []
+
+    monkeypatch.setattr(replaygain, "measure_loudness", track_loudness.get)
+    monkeypatch.setattr(replaygain, "measure_album_loudness", lambda got: -12.5)
+    monkeypatch.setattr(
+        replaygain,
+        "write_r128",
+        lambda path, track, album: not written.append((path, track, album)),
+    )
+
+    assert replaygain.normalize_album(paths) == 2
+    assert {album for _, _, album in written} == {replaygain.r128_q78(-12.5)}
+    assert replaygain.r128_q78(-20.0) not in {album for _, _, album in written}
 
 
-def test_album_loudness_empty_falls_back_to_reference():
-    assert replaygain.album_loudness([]) == -23.0
+def test_normalize_album_skips_when_album_measurement_fails(monkeypatch, tmp_path: Path):
+    path = tmp_path / "track.opus"
+    monkeypatch.setattr(replaygain, "measure_loudness", lambda _path: -20.0)
+    monkeypatch.setattr(replaygain, "measure_album_loudness", lambda _paths: None)
+    monkeypatch.setattr(
+        replaygain,
+        "write_r128",
+        lambda *_args: pytest.fail("must not write inconsistent partial gain tags"),
+    )
+    assert replaygain.normalize_album([path]) == 0
 
 
 def _make_opus(path: Path, volume_db: float) -> None:
@@ -108,3 +130,7 @@ def test_normalize_album_empty_is_noop(tmp_path: Path):
 
 def test_measure_loudness_missing_file_returns_none(tmp_path: Path):
     assert replaygain.measure_loudness(tmp_path / "nope.opus") is None
+
+
+def test_measure_album_loudness_empty_is_none():
+    assert replaygain.measure_album_loudness([]) is None

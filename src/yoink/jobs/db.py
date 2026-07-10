@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS album_jobs (
   mb_release_id TEXT,
   artist TEXT, album TEXT, year INTEGER, total_tracks INTEGER,
   status TEXT NOT NULL,
+  error TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS track_jobs (
@@ -80,6 +81,7 @@ class AlbumJob:
     year: int | None
     total_tracks: int
     status: str
+    error: str | None = None
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> AlbumJob:
@@ -91,6 +93,7 @@ class AlbumJob:
             year=r["year"],
             total_tracks=r["total_tracks"],
             status=r["status"],
+            error=r["error"],
         )
 
 
@@ -155,6 +158,11 @@ class Database:
     def _init_schema(self) -> None:
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            album_cols = {
+                r["name"] for r in c.execute("PRAGMA table_info(album_jobs)")
+            }
+            if "error" not in album_cols:
+                c.execute("ALTER TABLE album_jobs ADD COLUMN error TEXT")
             # Migrate older DBs created before manual_video_id existed.
             cols = {r["name"] for r in c.execute("PRAGMA table_info(track_jobs)")}
             if "manual_video_id" not in cols:
@@ -314,9 +322,29 @@ class Database:
     def set_album_status(self, album_id: int, status: str) -> None:
         with self._conn() as c:
             c.execute(
-                "UPDATE album_jobs SET status=?, updated_at=? WHERE id=?",
+                "UPDATE album_jobs SET status=?, error=NULL, updated_at=? WHERE id=?",
                 (status, _now(), album_id),
             )
+
+    def fail_album(self, album_id: int, error: str) -> None:
+        """Record an album-level failure without stranding in-flight tracks."""
+        now = _now()
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                c.execute(
+                    "UPDATE track_jobs SET status=?, updated_at=? "
+                    "WHERE album_job_id=? AND status IN (?,?)",
+                    (TRACK_QUEUED, now, album_id, *_TRACK_INFLIGHT),
+                )
+                c.execute(
+                    "UPDATE album_jobs SET status=?, error=?, updated_at=? WHERE id=?",
+                    (ALBUM_FAILED, error[:500], now, album_id),
+                )
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
 
     def update_track(self, track_id: int, **fields) -> None:
         if not fields:
@@ -344,6 +372,11 @@ class Database:
         terminal = done + prog.get(TRACK_FAILED, 0) + prog.get(TRACK_NEEDS_REVIEW, 0)
         if total and terminal == total:
             status = ALBUM_DONE if done == total else ALBUM_FAILED
+        elif prog.get(TRACK_QUEUED, 0):
+            # A transient track failure is put back in TRACK_QUEUED until its
+            # attempt budget is exhausted. Make the parent claimable again so
+            # that durable retry state is acted on without requiring a restart.
+            status = ALBUM_QUEUED
         else:
             status = ALBUM_DOWNLOADING
         self.set_album_status(album_id, status)
@@ -356,21 +389,38 @@ class Database:
             c.execute("DELETE FROM album_jobs WHERE id=?", (album_id,))
 
     def requeue_album(self, album_id: int) -> int:
-        """Reset failed/needs_review tracks to queued so the worker retries.
+        """Reset recoverable tracks and make a failed album claimable again.
 
-        Returns the number of tracks requeued.
+        Returns the number of unfinished tracks available to the retry.
         """
         now = _now()
         with self._conn() as c:
-            cur = c.execute(
+            album = c.execute(
+                "SELECT status FROM album_jobs WHERE id=?", (album_id,)
+            ).fetchone()
+            if album is None:
+                return 0
+            c.execute(
                 "UPDATE track_jobs SET status=?, attempts=0, error=NULL, updated_at=? "
-                "WHERE album_job_id=? AND status IN (?,?)",
-                (TRACK_QUEUED, now, album_id, TRACK_NEEDS_REVIEW, TRACK_FAILED),
+                "WHERE album_job_id=? AND status IN (?,?,?,?)",
+                (
+                    TRACK_QUEUED,
+                    now,
+                    album_id,
+                    TRACK_NEEDS_REVIEW,
+                    TRACK_FAILED,
+                    TRACK_MATCHING,
+                    TRACK_DOWNLOADING,
+                ),
             )
-            n = cur.rowcount
-            if n:
+            n = c.execute(
+                "SELECT COUNT(*) FROM track_jobs "
+                "WHERE album_job_id=? AND status != ?",
+                (album_id, TRACK_DONE),
+            ).fetchone()[0]
+            if n or album["status"] == ALBUM_FAILED:
                 c.execute(
-                    "UPDATE album_jobs SET status=?, updated_at=? WHERE id=?",
+                    "UPDATE album_jobs SET status=?, error=NULL, updated_at=? WHERE id=?",
                     (ALBUM_QUEUED, now, album_id),
                 )
         return n

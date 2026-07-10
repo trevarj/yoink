@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Static
 
@@ -34,18 +34,32 @@ class ResolveScreen(ModalScreen[str | None]):
     BINDINGS = [
         ("escape", "cancel", "Cancel"),
         ("enter", "choose", "Choose"),
+        ("/", "focus_url", "Paste URL"),
     ]
 
     CSS = """
-    ResolveScreen { align: center middle; }
+    ResolveScreen { align: center middle; background: #05080db3; }
     #dialog {
-        width: 90%; height: 80%;
-        border: thick $primary; background: $surface; padding: 1 2;
+        width: 92%; max-width: 124; height: 84%;
+        border: tall #67d4e8; background: #111823; padding: 1 2;
     }
-    #resolve_header { height: auto; text-style: bold; margin-bottom: 1; }
+    #resolve_kicker { height: 1; color: #67d4e8; text-style: bold; }
+    #resolve_header {
+        height: auto; min-height: 3; text-style: bold; padding: 1;
+        margin-bottom: 1; background: #172130; border-left: thick #a99cff;
+    }
+    #candidate_heading { height: 2; }
+    #candidate_title { width: 1fr; text-style: bold; }
+    #candidate_count { width: auto; color: #8290a3; text-align: right; }
     #candidates { height: 1fr; }
-    #url { dock: bottom; margin-top: 1; }
-    #resolve_help { dock: bottom; height: 1; color: $text-muted; }
+    #source_panel {
+        height: 6; margin-top: 1; padding: 0 1;
+        background: #0a0e14; border: solid #263448;
+    }
+    #source_label { height: 2; padding-top: 1; color: #8290a3; }
+    #url { height: 3; border: tall #263448; background: #172130; }
+    #url:focus { border: tall #67d4e8; }
+    #resolve_help { height: 1; color: #8290a3; text-align: center; }
     """
 
     def __init__(self, track: TrackJob, yt: YouTubeMusic, config: Config) -> None:
@@ -58,23 +72,26 @@ class ResolveScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             reason = f"  ·  reason: {self.track.error}" if self.track.error else ""
-            br = (
-                f"  ·  {self.track.audio_bitrate:.0f}k"
-                if self.track.audio_bitrate
-                else ""
-            )
+            br = f"  ·  {self.track.audio_bitrate:.0f}k" if self.track.audio_bitrate else ""
+            yield Static("MANUAL SOURCE", id="resolve_kicker")
             yield Static(
-                f"Resolve: {self.track.artist} — {self.track.title}  "
-                f"[{_fmt(self.track.duration_ms)}]{reason}{br}",
+                f"{self.track.artist} — {self.track.title}\n"
+                f"[dim]{_fmt(self.track.duration_ms)}{reason}{br}[/dim]",
                 id="resolve_header",
             )
+            with Horizontal(id="candidate_heading"):
+                yield Static("Best matches", id="candidate_title")
+                yield Static("Searching…", id="candidate_count")
             yield DataTable(id="candidates", cursor_type="row", zebra_stripes=True)
-            yield Input(
-                placeholder="…or paste a YouTube URL / videoId, then Enter",
-                id="url",
-            )
+            with Container(id="source_panel"):
+                yield Static("Have the exact source?", id="source_label")
+                yield Input(
+                    placeholder="Paste a YouTube URL or video ID…",
+                    id="url",
+                )
             yield Static(
-                "Enter: pick highlighted candidate · Esc: cancel", id="resolve_help"
+                "↑/↓ choose  ·  Enter confirm  ·  / paste URL  ·  Esc cancel",
+                id="resolve_help",
             )
 
     def on_mount(self) -> None:
@@ -109,11 +126,15 @@ class ResolveScreen(ModalScreen[str | None]):
         table = self.query_one("#candidates", DataTable)
         table.clear()
         table.add_row("", "", "", "", f"Search failed: {msg}")
+        self.query_one("#candidate_count", Static).update("Search failed")
 
     def _populate(self, scored: list[tuple[Candidate, float]]) -> None:
         table = self.query_one("#candidates", DataTable)
         table.clear()
         self._cands = [c for c, _ in scored]
+        self.query_one("#candidate_count", Static).update(
+            f"{len(self._cands)} candidate{'s' if len(self._cands) != 1 else ''}"
+        )
         if not self._cands:
             table.add_row("", "", "", "", "No candidates — paste a URL below.")
             self.query_one("#url", Input).focus()
@@ -148,3 +169,6 @@ class ResolveScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_focus_url(self) -> None:
+        self.query_one("#url", Input).focus()

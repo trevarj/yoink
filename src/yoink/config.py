@@ -9,7 +9,9 @@ auth, only a descriptive User-Agent contact string.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -19,6 +21,8 @@ from platformdirs import PlatformDirs
 from . import __version__
 
 _dirs = PlatformDirs(appname="yoink", appauthor=False)
+
+_CODEC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 
 def _music_default() -> Path:
@@ -61,6 +65,49 @@ class Config:
     # Tagging backend: "beets" (canonical library import) or "mutagen" (direct,
     # deterministic write of the known MusicBrainz metadata).
     tagger: str = "beets"
+
+    def __post_init__(self) -> None:
+        """Reject invalid values before they reach worker threads or tools."""
+        for name in ("music_dir", "state_dir", "cache_dir"):
+            if not isinstance(getattr(self, name), Path):
+                raise ValueError(f"{name} must be a filesystem path")
+
+        if not isinstance(self.mb_contact, str) or not self.mb_contact.strip():
+            raise ValueError("mb_contact must be a non-empty string")
+
+        for name in ("duration_gate_s", "duration_soft_s", "min_match_score"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be a number")
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+        if self.duration_soft_s < self.duration_gate_s:
+            raise ValueError("duration_soft_s must be greater than or equal to duration_gate_s")
+
+        if isinstance(self.download_concurrency, bool) or not isinstance(
+            self.download_concurrency, int
+        ):
+            raise ValueError("download_concurrency must be an integer")
+        if self.download_concurrency < 1:
+            raise ValueError("download_concurrency must be at least 1")
+
+        if not isinstance(self.audio_codec, str) or not _CODEC_RE.fullmatch(
+            self.audio_codec
+        ):
+            raise ValueError("audio_codec must be a non-empty codec name")
+
+        if isinstance(self.min_audio_bitrate, bool) or not isinstance(
+            self.min_audio_bitrate, (int, float)
+        ):
+            raise ValueError("min_audio_bitrate must be a number")
+        if not math.isfinite(self.min_audio_bitrate) or self.min_audio_bitrate < 0:
+            raise ValueError("min_audio_bitrate must be a finite non-negative number")
+
+        for name in ("strip_featured_artists", "replaygain"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be true or false")
+        if not isinstance(self.tagger, str) or self.tagger not in {"beets", "mutagen"}:
+            raise ValueError("tagger must be 'beets' or 'mutagen'")
 
     # --- Derived paths -----------------------------------------------------
     @property
@@ -115,6 +162,24 @@ def load_config() -> Config:
     if not path.exists():
         return cfg
     data = tomllib.loads(path.read_text())
+    known = {
+        "music_dir",
+        "state_dir",
+        "cache_dir",
+        "mb_contact",
+        "duration_gate_s",
+        "duration_soft_s",
+        "min_match_score",
+        "download_concurrency",
+        "audio_codec",
+        "min_audio_bitrate",
+        "strip_featured_artists",
+        "replaygain",
+        "tagger",
+    }
+    unknown = sorted(set(data) - known)
+    if unknown:
+        raise ValueError(f"unknown configuration key(s): {', '.join(unknown)}")
     overrides: dict = {}
     for key in (
         "mb_contact",
@@ -132,5 +197,7 @@ def load_config() -> Config:
             overrides[key] = data[key]
     for key in ("music_dir", "state_dir", "cache_dir"):
         if key in data:
-            overrides[key] = Path(str(data[key])).expanduser()
+            if not isinstance(data[key], str) or not data[key].strip():
+                raise ValueError(f"{key} must be a non-empty path string")
+            overrides[key] = Path(data[key]).expanduser()
     return replace(cfg, **overrides)

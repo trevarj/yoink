@@ -96,6 +96,7 @@ class AlbumMatch:
     artist: str
     track_video_ids: tuple[str, ...]
     track_titles: tuple[str, ...]
+    track_durations_s: tuple[int | None, ...] = ()
 
 
 class YouTubeMusic:
@@ -133,10 +134,11 @@ class YouTubeMusic:
                 continue
             if track_count and len(tracks) != track_count:
                 continue  # edition mismatch -> not confident
-            vids, titles = [], []
+            vids, titles, durations = [], [], []
             for t in tracks:
                 vids.append(t.get("videoId") or "")
                 titles.append(t.get("title") or "")
+                durations.append(_duration_seconds(t))
             return AlbumMatch(
                 browse_id=browse_id,
                 audio_playlist_id=apid,
@@ -144,6 +146,7 @@ class YouTubeMusic:
                 artist=artist,
                 track_video_ids=tuple(vids),
                 track_titles=tuple(titles),
+                track_durations_s=tuple(durations),
             )
         return None
 

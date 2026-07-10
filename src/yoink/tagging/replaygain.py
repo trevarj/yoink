@@ -10,9 +10,10 @@ players with ReplayGain support honor the tags.
 
 Loudness is measured with ffmpeg's ``ebur128`` filter (the same filter beets'
 ffmpeg backend uses). The R128 reference level is -23 LUFS, so a track's gain in
-dB is ``23.0 - loudness``. Album loudness is the mean of the per-track integrated
-loudnesses (the standard EBU R128 album approximation). The opus R128 gain tag
-is a Q7.8 fixed-point integer: ``round(256 * gain_db)``.
+dB is ``-23.0 - loudness``. Album loudness is measured by decoding the tracks as
+one continuous programme; averaging per-track LUFS values is not equivalent to
+integrated loudness. The opus R128 gain tag is a Q7.8 fixed-point integer:
+``round(256 * gain_db)``.
 
 Everything here is best-effort: a missing ffmpeg, an unreadable file, or a parse
 failure makes a function return ``None``/``False`` so the caller can skip
@@ -59,11 +60,25 @@ def r128_q78(loudness_lufs: float, ref_lufs: float = _R128_REF_LUFS) -> int:
     return max(_Q78_MIN, min(_Q78_MAX, q78))
 
 
-def album_loudness(loudnesses: list[float]) -> float:
-    """Mean of per-track integrated loudnesses -- the EBU R128 album gain basis."""
-    if not loudnesses:
-        return _R128_REF_LUFS
-    return sum(loudnesses) / len(loudnesses)
+def _run_measurement(cmd: list[str], timeout: int) -> float | None:
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    # The integrated-loudness summary is written to stderr.
+    matches = _INTEGRATED_RE.findall(proc.stderr or "")
+    if not matches:
+        return None
+    try:
+        return float(matches[-1])
+    except ValueError:
+        return None
 
 
 def measure_loudness(path: Path) -> float | None:
@@ -75,36 +90,51 @@ def measure_loudness(path: Path) -> float | None:
     ffmpeg = _ffmpeg()
     if ffmpeg is None:
         return None
-    cmd = [
-        ffmpeg,
-        "-nostats",
-        "-hide_banner",
-        "-i",
-        str(path),
-        "-af",
-        "ebur128=metadata=1",
-        "-f",
-        "null",
-        "-",
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_MEASURE_TIMEOUT,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    return _run_measurement(
+        [
+            ffmpeg,
+            "-nostats",
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-af",
+            "ebur128=metadata=1",
+            "-f",
+            "null",
+            "-",
+        ],
+        _MEASURE_TIMEOUT,
+    )
+
+
+def measure_album_loudness(paths: list[Path]) -> float | None:
+    """Measure tracks as one continuous programme, yielding true album LUFS."""
+    if not paths:
         return None
-    # The integrated-loudness summary is written to stderr.
-    m = _INTEGRATED_RE.search(proc.stderr or "")
-    if not m:
+    ffmpeg = _ffmpeg()
+    if ffmpeg is None:
         return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
+    inputs = [part for path in paths for part in ("-i", str(path))]
+    streams = "".join(f"[{index}:a:0]" for index in range(len(paths)))
+    filter_graph = (
+        f"{streams}concat=n={len(paths)}:v=0:a=1,ebur128=metadata=1[album]"
+    )
+    return _run_measurement(
+        [
+            ffmpeg,
+            "-nostats",
+            "-hide_banner",
+            *inputs,
+            "-filter_complex",
+            filter_graph,
+            "-map",
+            "[album]",
+            "-f",
+            "null",
+            "-",
+        ],
+        _MEASURE_TIMEOUT * len(paths),
+    )
 
 
 def write_r128(path: Path, track_gain_q78: int, album_gain_q78: int) -> bool:
@@ -140,7 +170,9 @@ def normalize_album(paths: list[Path]) -> int:
             measured.append((p, loud))
     if not measured:
         return 0
-    album = album_loudness([loud for _, loud in measured])
+    album = measure_album_loudness([path for path, _ in measured])
+    if album is None:
+        return 0
     album_q78 = r128_q78(album)
     tagged = 0
     measured_by_path = dict(measured)

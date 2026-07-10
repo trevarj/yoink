@@ -15,6 +15,7 @@ import re
 
 import musicbrainzngs
 
+from .. import __version__
 from ..config import Config
 from ..models import ArtistHit, Release, ReleaseGroupHit, Track
 from .cache import JsonCache
@@ -78,7 +79,7 @@ class MusicBrainz:
     def __init__(self, config: Config) -> None:
         self._cache = JsonCache(config.mb_cache_dir)
         # musicbrainzngs wants app name/version/contact split out.
-        musicbrainzngs.set_useragent("yoink", "0.1.0", config.mb_contact)
+        musicbrainzngs.set_useragent("yoink", __version__, config.mb_contact)
         # Enforce the 1 req/s courtesy limit at the library level.
         musicbrainzngs.set_rate_limit(limit_or_interval=1.0, new_requests=1)
 

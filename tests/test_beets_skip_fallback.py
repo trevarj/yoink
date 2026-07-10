@@ -38,14 +38,22 @@ class _FakeBeets:
     def __init__(self, move_staged: bool) -> None:
         self.move_staged = move_staged
         self.imported: list[str] = []
+        self.paths: dict[tuple[int, int], Path] = {}
 
     def import_album(self, album_dir: Path, mb_release_id: str) -> str:
         self.imported.append(str(album_dir))
         if self.move_staged:
             for p in Path(album_dir).glob("*"):
                 if p.is_file():
-                    p.unlink()
+                    disc, track = p.name.split(" ", 1)[0].split("-", 1)
+                    final = album_dir.parent / "beets-library" / p.with_suffix(".flac").name
+                    final.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(p), str(final))
+                    self.paths[(int(disc), int(track))] = final
         return ""
+
+    def paths_for_release(self, _mb_release_id: str) -> dict[tuple[int, int], Path]:
+        return self.paths
 
 
 def _setup(move_staged: bool):
@@ -125,6 +133,8 @@ def test_beets_normal_import_no_fallback():
         worker._finish_beets(album, album_dir)
         got = db.get_track(row.id)
         assert got.status == dbmod.TRACK_DONE
+        assert got.final_path == str(worker._beets.paths[(1, 1)])
+        assert Path(got.final_path).suffix == ".flac"
         # beets handled it -> no mutagen fallback, no cover copy.
         assert calls["place"] == []
         assert calls["cover"] == []

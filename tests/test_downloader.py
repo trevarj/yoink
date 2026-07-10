@@ -1,11 +1,13 @@
 """Pure unit tests for the audio-quality probe (no network).
 
-`probe_audio` must never crash: it returns None on failure and falls back from
-the often-None `abr` to `tbr` (the trustworthy bitrate field for YouTube opus).
+`probe_audio` must never crash and must inspect the same codec/format selected
+for download. It falls back from the often-None `abr` to `tbr` (the trustworthy
+bitrate field for YouTube opus).
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -42,6 +44,11 @@ class _FakeYDL:
             raise self.info
         return self.info
 
+    def download(self, urls: list[str]) -> int:
+        output = Path(self.opts["outtmpl"]["default"].replace("%(ext)s", "opus"))
+        output.write_bytes(b"audio")
+        return 0
+
 
 @pytest.fixture(autouse=True)
 def _patch_ydl(monkeypatch):
@@ -64,6 +71,39 @@ def test_probe_picks_highest_tbr_audio_only(tmp_path):
     assert q == AudioQuality(
         video_id=VID, bitrate_kbps=256.0, ext="webm", acodec="opus", filesize=None
     )
+
+
+def test_probe_uses_the_format_selected_by_yt_dlp(tmp_path):
+    _FakeYDL.info = {
+        # yt-dlp overlays its selected format onto the result. This opus stream
+        # is what download() will use despite another codec having higher tbr.
+        "format_id": "251",
+        "vcodec": "none",
+        "acodec": "opus",
+        "ext": "webm",
+        "tbr": 128,
+        "formats": [
+            {"format_id": "251", "vcodec": "none", "acodec": "opus", "tbr": 128},
+            {"format_id": "141", "vcodec": "none", "acodec": "mp4a", "tbr": 256},
+        ],
+    }
+    q = _downloader(tmp_path).probe_audio(VID)
+    assert q is not None
+    assert q.acodec == "opus"
+    assert q.bitrate_kbps == 128.0
+
+
+def test_probe_fallback_mirrors_codec_first_format_sort(tmp_path):
+    _FakeYDL.info = {
+        "formats": [
+            {"vcodec": "none", "acodec": "opus", "ext": "webm", "tbr": 128},
+            {"vcodec": "none", "acodec": "mp4a", "ext": "m4a", "tbr": 256},
+        ]
+    }
+    q = _downloader(tmp_path).probe_audio(VID)
+    assert q is not None
+    assert q.acodec == "opus"
+    assert q.bitrate_kbps == 128.0
 
 
 def test_probe_falls_back_to_abr_when_tbr_missing(tmp_path):
@@ -123,3 +163,13 @@ def test_probe_empty_formats_falls_back_to_info(tmp_path):
     q = _downloader(tmp_path).probe_audio(VID)
     assert q is not None
     assert q.bitrate_kbps is None
+
+
+def test_concurrent_same_video_downloads_use_distinct_staging_paths(tmp_path):
+    downloader = _downloader(tmp_path)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        paths = list(executor.map(downloader.download, [VID, VID]))
+
+    assert paths[0] != paths[1]
+    assert all(path.exists() for path in paths)
+    assert all(path.name.startswith(f"{VID}-") for path in paths)

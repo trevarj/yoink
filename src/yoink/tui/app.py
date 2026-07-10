@@ -9,10 +9,12 @@ SQLite queue while the background worker downloads + tags.
 
 from __future__ import annotations
 
+from rich.markup import escape
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (
     DataTable,
     Footer,
@@ -40,30 +42,48 @@ def _fmt_ms(ms: int | None) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _status_text(status: str) -> Text:
+    """Render machine statuses as compact, readable state labels."""
+    palette = {
+        dbmod.ALBUM_DONE: ("#68d391", "done"),
+        dbmod.TRACK_DONE: ("#68d391", "done"),
+        dbmod.TRACK_TAGGED: ("#68d391", "tagged"),
+        dbmod.ALBUM_FAILED: ("#ff6b7a", "failed"),
+        dbmod.TRACK_FAILED: ("#ff6b7a", "failed"),
+        dbmod.TRACK_NEEDS_REVIEW: ("#f4c95d", "review"),
+        dbmod.ALBUM_DOWNLOADING: ("#67d4e8", "downloading"),
+        dbmod.TRACK_DOWNLOADING: ("#67d4e8", "downloading"),
+        dbmod.ALBUM_RESOLVING: ("#a99cff", "resolving"),
+        dbmod.TRACK_MATCHING: ("#a99cff", "matching"),
+        dbmod.ALBUM_QUEUED: ("#8b98a8", "queued"),
+        dbmod.TRACK_QUEUED: ("#8b98a8", "queued"),
+    }
+    color, label = palette.get(status, ("#8b98a8", status.replace("_", " ")))
+    value = Text("● ", style=color)
+    value.append(label)
+    return value
+
+
 class YoinkApp(App):
+    TITLE = "yoink"
+    SUB_TITLE = "build a library worth keeping"
+    CSS_PATH = "yoink.tcss"
+
     # Free C-n/C-p for emacs-style table navigation; the command palette moves
     # to Ctrl+Shift+P (Textual defaults Ctrl+P to it).
     COMMAND_PALETTE_BINDING = "ctrl+shift+p"
 
-    CSS = """
-    #search { dock: top; }
-    #activity { dock: bottom; height: 1; color: $text-muted; background: $panel; }
-    #results { width: 60%; }
-    #preview_pane { width: 40%; border-left: solid $primary; padding: 0 1; }
-    #preview_header { height: auto; color: $text; text-style: bold; }
-    #albums { width: 45%; }
-    DataTable { height: 1fr; }
-    """
-
     BINDINGS = [
-        ("a", "enqueue", "Queue album"),
-        ("/", "focus_search", "Search"),
-        ("x", "remove_album", "Remove"),
-        ("R", "requeue_album", "Requeue failed"),
-        ("m", "resolve_track", "Resolve track"),
-        ("r", "refresh", "Refresh"),
-        ("b", "goto_browse", "Browse tab"),
-        ("q", "goto_queue", "Queue tab"),
+        Binding("a", "enqueue", "Queue album", show=False),
+        Binding("/", "focus_search", "Search", show=False),
+        Binding("x", "remove_album", "Remove", show=False),
+        Binding("R", "requeue_album", "Requeue failed", show=False),
+        Binding("m", "resolve_track", "Resolve track", show=False),
+        Binding("r", "refresh", "Refresh", show=False),
+        Binding("b", "goto_browse", "Browse tab", show=False),
+        Binding("q", "quit", "Quit"),
+        Binding("1", "goto_browse", show=False),
+        Binding("2", "goto_queue", show=False),
         # Emacs-style table navigation. Hidden from the footer; Input already
         # binds C-a/e/b/f so these only apply when a DataTable has focus.
         Binding("ctrl+n", "emacs_down", show=False),
@@ -100,39 +120,71 @@ class YoinkApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with TabbedContent(initial="browse"):
-            with TabPane("Browse", id="browse"):
-                with Vertical():
-                    yield Input(
-                        placeholder="Search artist / album, then Enter…", id="search"
-                    )
-                    with Horizontal(id="browse_body"):
-                        yield DataTable(
-                            id="results", cursor_type="row", zebra_stripes=True
+            with TabPane("⌕  Discover", id="browse"):
+                with Vertical(id="browse_page", classes="page"):
+                    with Container(id="search_panel"):
+                        yield Static("DISCOVER MUSIC", classes="eyebrow")
+                        yield Input(
+                            placeholder="Artist, album, or both…",
+                            id="search",
                         )
-                        with Vertical(id="preview_pane"):
+                        yield Static(
+                            "Search MusicBrainz  ·  Enter to preview  ·  A to add to queue",
+                            classes="quiet hint",
+                        )
+                    with Horizontal(id="browse_body"):
+                        with Vertical(id="catalog_pane", classes="pane"):
+                            with Horizontal(classes="section_heading"):
+                                yield Static("Albums", classes="section_title")
+                                yield Static("Ready to search", id="results_count", classes="quiet")
+                            yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
+                        with Vertical(id="preview_pane", classes="pane"):
+                            yield Static("ALBUM PREVIEW", classes="eyebrow")
                             yield Static(
-                                "Highlight an album to preview its tracks.",
+                                "Choose an album\n"
+                                "[dim]Its tracklist and release details will appear here.[/dim]",
                                 id="preview_header",
                             )
                             yield DataTable(id="preview", cursor_type="row")
-            with TabPane("Queue", id="queue"):
-                with Horizontal():
-                    yield DataTable(id="albums", cursor_type="row", zebra_stripes=True)
-                    yield DataTable(id="tracks", cursor_type="row", zebra_stripes=True)
-        yield Static("", id="activity")
-        yield Footer()
+            with TabPane("⇣  Queue", id="queue"):
+                with Vertical(id="queue_page", classes="page"):
+                    with Horizontal(id="queue_overview"):
+                        yield Static(
+                            "[b]0[/b]\n[dim]ALBUMS[/dim]", id="metric_albums", classes="metric"
+                        )
+                        yield Static(
+                            "[b]0[/b]\n[dim]TRACKS DONE[/dim]", id="metric_done", classes="metric"
+                        )
+                        yield Static(
+                            "[b]0[/b]\n[dim]NEED ATTENTION[/dim]",
+                            id="metric_review",
+                            classes="metric warning_metric",
+                        )
+                    with Horizontal(id="queue_body"):
+                        with Vertical(id="albums_pane", classes="pane"):
+                            with Horizontal(classes="section_heading"):
+                                yield Static("Albums", classes="section_title")
+                                yield Static("Newest first", classes="quiet")
+                            yield DataTable(id="albums", cursor_type="row", zebra_stripes=True)
+                        with Vertical(id="tracks_pane", classes="pane"):
+                            yield Static("TRACKS", classes="eyebrow")
+                            yield Static(
+                                "Select an album to inspect its tracks.", id="queue_detail"
+                            )
+                            yield DataTable(id="tracks", cursor_type="row", zebra_stripes=True)
+        with Horizontal(id="activity_bar"):
+            yield Static("●", id="activity_indicator")
+            yield Static("Worker ready", id="activity")
+            yield Static("↑/↓ move   Enter preview   A queue   / search", id="nav_hint")
+        yield Footer(compact=True)
 
     def on_mount(self) -> None:
         self.query_one("#results", DataTable).add_columns(
             "Artist", "Album", "Year", "Type", "Notes"
         )
         self.query_one("#preview", DataTable).add_columns("#", "Title", "Time")
-        self.query_one("#albums", DataTable).add_columns(
-            "Artist", "Album", "Status", "Done"
-        )
-        self.query_one("#tracks", DataTable).add_columns(
-            "#", "Title", "Status", "Score", "Note"
-        )
+        self.query_one("#albums", DataTable).add_columns("Artist", "Album", "Status", "Done")
+        self.query_one("#tracks", DataTable).add_columns("#", "Title", "Status", "Score", "Note")
         if "set contact" in self.config.mb_contact:
             self.notify(
                 "Set 'mb_contact' in config.toml (MusicBrainz etiquette).",
@@ -153,6 +205,8 @@ class YoinkApp(App):
         query = event.value.strip()
         if query:
             self.notify(f"Searching “{query}”…", timeout=2)
+            self.query_one("#results_count", Static).update("Searching…")
+            self._set_activity(f"Searching MusicBrainz for “{query}”")
             self._search(query)
 
     @work(thread=True, exclusive=True, group="search")
@@ -161,6 +215,7 @@ class YoinkApp(App):
             hits = self.mb.search_albums(query)
         except Exception as e:  # network / MB error
             self.call_from_thread(self.notify, f"Search failed: {e}", severity="error")
+            self.call_from_thread(self.query_one("#results_count", Static).update, "Search failed")
             return
         self.call_from_thread(self._show_results, hits)
 
@@ -169,9 +224,11 @@ class YoinkApp(App):
         table = self.query_one("#results", DataTable)
         table.clear()
         for h in hits:
-            table.add_row(
-                h.artist, h.title, str(h.year or ""), h.primary_type or "", h.description
-            )
+            table.add_row(h.artist, h.title, str(h.year or ""), h.primary_type or "", h.description)
+        self.query_one("#results_count", Static).update(
+            f"{len(hits)} result{'s' if len(hits) != 1 else ''}"
+        )
+        self._set_activity("Search complete" if hits else "No albums matched that search")
         self._clear_preview()
         if hits:
             table.focus()
@@ -180,7 +237,7 @@ class YoinkApp(App):
     def _clear_preview(self) -> None:
         self._preview_mbid = None
         self.query_one("#preview_header", Static).update(
-            "Press Enter on an album to preview its tracks."
+            "Choose an album\n[dim]Its tracklist and release details will appear here.[/dim]"
         )
         self.query_one("#preview", DataTable).clear()
 
@@ -224,9 +281,11 @@ class YoinkApp(App):
         )
         header.update(f"{release.artist} — {release.title}\n{release.track_count} tracks · {meta}")
         for t in release.tracks:
-            label = f"{t.disc}.{t.position:02d}" if any(
-                tk.disc > 1 for tk in release.tracks
-            ) else f"{t.position:02d}"
+            label = (
+                f"{t.disc}.{t.position:02d}"
+                if any(tk.disc > 1 for tk in release.tracks)
+                else f"{t.position:02d}"
+            )
             table.add_row(label, t.title, _fmt_ms(t.duration_ms))
 
     # --- enqueue ----------------------------------------------------------
@@ -249,9 +308,7 @@ class YoinkApp(App):
             self.call_from_thread(self.notify, f"Resolve failed: {e}", severity="error")
             return
         if release is None:
-            self.call_from_thread(
-                self.notify, "No release found for that album", severity="error"
-            )
+            self.call_from_thread(self.notify, "No release found for that album", severity="error")
             return
         album_id = self.db.enqueue_release(release)
         verb = "Queued" if album_id else "Already queued"
@@ -267,14 +324,25 @@ class YoinkApp(App):
         table = self.query_one("#albums", DataTable)
         cursor = table.cursor_row
         table.clear()
+        total_done = 0
+        total_review = 0
         for a in albums:
             prog = self.db.album_progress(a.id)
             done = prog.get(dbmod.TRACK_DONE, 0)
-            flagged = prog.get(dbmod.TRACK_NEEDS_REVIEW, 0) + prog.get(
-                dbmod.TRACK_FAILED, 0
-            )
+            flagged = prog.get(dbmod.TRACK_NEEDS_REVIEW, 0) + prog.get(dbmod.TRACK_FAILED, 0)
+            total_done += done
+            total_review += flagged
             cell = f"{done}/{a.total_tracks}" + (f" ⚠{flagged}" if flagged else "")
-            table.add_row(a.artist, a.album, a.status, cell)
+            table.add_row(a.artist, a.album, _status_text(a.status), cell)
+        self.query_one("#metric_albums", Static).update(
+            f"[b]{len(albums)}[/b]\n[dim]ALBUM{'S' if len(albums) != 1 else ''}[/dim]"
+        )
+        self.query_one("#metric_done", Static).update(
+            f"[b]{total_done}[/b]\n[dim]TRACKS DONE[/dim]"
+        )
+        self.query_one("#metric_review", Static).update(
+            f"[b]{total_review}[/b]\n[dim]NEED ATTENTION[/dim]"
+        )
         if cursor is not None and albums:
             table.move_cursor(row=min(cursor, len(albums) - 1))
         self._refresh_tracks()
@@ -293,15 +361,23 @@ class YoinkApp(App):
         tracks_table.clear()
         if album is None:
             self._tracks = []
+            self.query_one("#queue_detail", Static).update("Select an album to inspect its tracks.")
             return
+        self.query_one("#queue_detail", Static).update(
+            f"[b]{album.artist} — {album.album}[/b]\n"
+            f"[dim]{album.year or 'Year unknown'} · {album.total_tracks} tracks[/dim]"
+            + (f"\n[red]{escape(album.error)}[/red]" if album.error else "")
+        )
         self._tracks = self.db.list_tracks(album.id)
         for t in self._tracks:
-            score = "manual" if t.manual_video_id else (
-                f"{t.match_score:.0f}" if t.match_score is not None else ""
+            score = (
+                "manual"
+                if t.manual_video_id
+                else (f"{t.match_score:.0f}" if t.match_score is not None else "")
             )
             note = (t.error or "")[:48]
             tracks_table.add_row(
-                f"{t.disc_no}.{t.track_no:02d}", t.title, t.status, score, note
+                f"{t.disc_no}.{t.track_no:02d}", t.title, _status_text(t.status), score, note
             )
         if cursor is not None and self._tracks:
             tracks_table.move_cursor(row=min(cursor, len(self._tracks) - 1))
@@ -331,6 +407,17 @@ class YoinkApp(App):
         # Local DB read only -- safe to do on highlight.
         if event.data_table.id == "albums":
             self._refresh_tracks()
+        elif event.data_table.id == "results":
+            idx = event.cursor_row
+            if idx is not None and 0 <= idx < len(self._results):
+                hit = self._results[idx]
+                if self._preview_mbid != hit.mbid:
+                    self.query_one("#preview_header", Static).update(
+                        f"[b]{hit.artist} — {hit.title}[/b]\n"
+                        f"[dim]{hit.year or 'Year unknown'} · {hit.primary_type or 'Release'}"
+                        " · Press Enter to load tracks[/dim]"
+                    )
+                    self.query_one("#preview", DataTable).clear()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # Enter on a search result previews its tracklist (one API call), so we
@@ -345,6 +432,8 @@ class YoinkApp(App):
         album = self._selected_album()
         if album is None:
             return
+        if self.worker:
+            self.worker.cancel_album(album.id)
         self.db.delete_album(album.id)
         self.notify(f"Removed: {album.artist} — {album.album}")
         self.action_refresh()
@@ -354,9 +443,7 @@ class YoinkApp(App):
         if album is None:
             return
         n = self.db.requeue_album(album.id)
-        self.notify(
-            f"Requeued {n} track(s) in {album.album}" if n else "Nothing to requeue"
-        )
+        self.notify(f"Requeued {n} track(s) in {album.album}" if n else "Nothing to requeue")
         self.action_refresh()
 
     # --- worker progress --------------------------------------------------
@@ -380,6 +467,17 @@ class YoinkApp(App):
     def action_goto_queue(self) -> None:
         self.query_one(TabbedContent).active = "queue"
         self.action_refresh()
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        if event.pane.id == "queue":
+            self.query_one("#nav_hint", Static).update(
+                "↑/↓ move   M resolve   R retry   X remove   1 discover"
+            )
+            self.action_refresh()
+        else:
+            self.query_one("#nav_hint", Static).update(
+                "↑/↓ move   Enter preview   A queue   / search   2 queue"
+            )
 
     def _switch_tab(self, delta: int) -> None:
         tc = self.query_one(TabbedContent)

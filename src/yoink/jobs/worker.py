@@ -55,6 +55,10 @@ class Worker(threading.Thread):
         self.poll_interval = poll_interval
         self._stop = threading.Event()
         self._yt_lock = threading.Lock()  # serialize shared ytmusicapi searches
+        self._state_lock = threading.Lock()
+        self._finalize_lock = threading.Lock()
+        self._active_album_id: int | None = None
+        self._cancelled_albums: set[int] = set()
         self._mb = MusicBrainz(config)
         self._art = CoverArtArchive(config)
         self._yt = YouTubeMusic()
@@ -64,25 +68,52 @@ class Worker(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
+    def cancel_album(self, album_id: int) -> bool:
+        """Cancel an active album and wait for any final write to drain."""
+        with self._state_lock:
+            if self._active_album_id != album_id:
+                return False
+            self._cancelled_albums.add(album_id)
+        # Final placement and this barrier share a lock. Once this returns, no
+        # new library write for the cancelled album can begin.
+        with self._finalize_lock:
+            pass
+        return True
+
+    def _album_cancelled(self, album_id: int) -> bool:
+        with self._state_lock:
+            cancelled = album_id in self._cancelled_albums
+        return cancelled or self.db.get_album_job(album_id) is None
+
     def run(self) -> None:
         while not self._stop.is_set():
             album = self.db.claim_next_album()
             if album is None:
                 self._stop.wait(self.poll_interval)
                 continue
+            with self._state_lock:
+                self._active_album_id = album.id
             try:
                 self._process_album(album)
             except Exception as e:  # never let one album kill the worker
-                self.db.set_album_status(album.id, dbmod.ALBUM_FAILED)
-                self._emit(0, None, f"album {album.id} error: {e}")
+                if not self._album_cancelled(album.id):
+                    self.db.fail_album(album.id, str(e))
+                    self._emit(0, None, f"album {album.id} error: {e}")
+            finally:
+                with self._state_lock:
+                    self._cancelled_albums.discard(album.id)
+                    if self._active_album_id == album.id:
+                        self._active_album_id = None
 
     # --- album ------------------------------------------------------------
     def _process_album(self, album: dbmod.AlbumJob) -> None:
         if not album.mb_release_id:
-            self.db.set_album_status(album.id, dbmod.ALBUM_FAILED)
+            self.db.fail_album(album.id, "album has no MusicBrainz release id")
             return
         release = self._mb.get_release(album.mb_release_id)
         album_art = self._art.front_cover(release.mbid)
+        if self._album_cancelled(album.id):
+            return
         self.db.set_album_status(album.id, dbmod.ALBUM_DOWNLOADING)
 
         # Try the album-as-playlist path for clean, aligned videoIds.
@@ -108,7 +139,7 @@ class Worker(threading.Thread):
         pending = [
             (i, t, r)
             for (i, t, r) in pending
-            if r is not None and r.status != dbmod.TRACK_DONE
+            if r is not None and r.status == dbmod.TRACK_QUEUED
         ]
         workers = max(1, self.config.download_concurrency)
         with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -131,13 +162,19 @@ class Worker(threading.Thread):
                 except Exception as e:  # defensive: never propagate
                     self._emit(0, None, f"track error: {e}")
 
+        if self._album_cancelled(album.id):
+            return
         if self._beets:
-            self._finish_beets(album, album_dir)
+            with self._finalize_lock:
+                if not self._album_cancelled(album.id):
+                    self._finish_beets(album, album_dir)
         elif self.config.replaygain:
             # Mutagen path has no beets import to compute gain, so do it here:
             # album-level R128 gain needs every track measured together.
             self._normalize_album(album.id)
 
+        if self._album_cancelled(album.id):
+            return
         self.db.recompute_album_status(album.id)
         if not self._beets and album_dir.exists():
             shutil.rmtree(album_dir, ignore_errors=True)
@@ -153,7 +190,16 @@ class Worker(threading.Thread):
             yt_title = album_match.track_titles[index] if index < len(
                 album_match.track_titles
             ) else ""
-            if vid and fuzz.token_set_ratio(track.title, yt_title) >= _ALBUM_TITLE_MIN:
+            yt_durations = getattr(album_match, "track_durations_s", ())
+            yt_duration = yt_durations[index] if index < len(yt_durations) else None
+            duration_ok = not (track.duration_ms and yt_duration) or abs(
+                yt_duration - track.duration_ms / 1000.0
+            ) <= self.config.duration_gate_s
+            if (
+                vid
+                and duration_ok
+                and fuzz.token_set_ratio(track.title, yt_title) >= _ALBUM_TITLE_MIN
+            ):
                 return vid, 100.0, "album-aligned"
 
         # Per-track search + scoring. Serialize the shared ytmusicapi client.
@@ -180,7 +226,7 @@ class Worker(threading.Thread):
         album_dir: Path,
         album_art=None,
     ) -> None:
-        if self._stop.is_set():
+        if self._stop.is_set() or self._album_cancelled(row.album_job_id):
             return
         self.db.update_track(row.id, status=dbmod.TRACK_MATCHING)
         if row.manual_video_id:
@@ -188,6 +234,8 @@ class Worker(threading.Thread):
             vid, score, reason = row.manual_video_id, -1.0, "manual"
         else:
             vid, score, reason = self._resolve_video_id(track, album_match, index)
+        if self._album_cancelled(row.album_job_id):
+            return
         if vid is None:
             self.db.update_track(
                 row.id, status=dbmod.TRACK_NEEDS_REVIEW, match_score=score, error=reason
@@ -238,24 +286,32 @@ class Worker(threading.Thread):
             self.db.update_track(row.id, status=status, error=str(e)[:500])
             return
 
+        if self._album_cancelled(row.album_job_id):
+            return
+
         # Pre-tag with authoritative metadata and replace YouTube thumbnails
         # with MusicBrainz-linked cover art when the archive has it.
         try:
             if self._beets:
                 mutagen_tagger.write_tags(staged, release, track, album_art)
+                if self._album_cancelled(row.album_job_id):
+                    return
                 dest = album_dir / _staged_name(track, staged.suffix)
                 shutil.move(str(staged), str(dest))
                 self.db.update_track(
                     row.id, status=dbmod.TRACK_TAGGED, staging_path=str(dest)
                 )
             else:
-                final = mutagen_tagger.place(
-                    staged, self.config.music_dir, release, track, album_art
-                )
-                self._maybe_strip_featured(final)
-                self.db.update_track(
-                    row.id, status=dbmod.TRACK_DONE, final_path=str(final), error=None
-                )
+                with self._finalize_lock:
+                    if self._album_cancelled(row.album_job_id):
+                        return
+                    final = mutagen_tagger.place(
+                        staged, self.config.music_dir, release, track, album_art
+                    )
+                    self._maybe_strip_featured(final)
+                    self.db.update_track(
+                        row.id, status=dbmod.TRACK_DONE, final_path=str(final), error=None
+                    )
                 self._emit(row.id, 1.0, "done")
         except Exception as e:
             self.db.update_track(row.id, status=dbmod.TRACK_FAILED, error=str(e)[:500])
@@ -269,6 +325,7 @@ class Worker(threading.Thread):
         assert self._beets is not None
         try:
             self._beets.import_album(album_dir, album.mb_release_id or "")
+            imported_paths = self._beets.paths_for_release(album.mb_release_id or "")
         except BeetsError as e:
             for t in tagged:
                 self.db.update_track(t.id, status=dbmod.TRACK_FAILED, error=str(e)[:500])
@@ -286,17 +343,19 @@ class Worker(threading.Thread):
             if staged and staged.exists():
                 self._beets_skip_fallback(t, tk, release, album.id)
                 continue
-            final = (
-                mutagen_tagger.final_path(self.config.music_dir, release, tk, ".opus")
-                if tk
-                else None
-            )
-            if final:
-                self._maybe_strip_featured(final)
+            final = imported_paths.get((t.disc_no, t.track_no))
+            if final is None:
+                self.db.update_track(
+                    t.id,
+                    status=dbmod.TRACK_FAILED,
+                    error="beets imported track but its final library path was not found",
+                )
+                continue
+            self._maybe_strip_featured(final)
             self.db.update_track(
                 t.id,
                 status=dbmod.TRACK_DONE,
-                final_path=str(final) if final else None,
+                final_path=str(final),
                 error=None,
             )
             self._emit(t.id, 1.0, "done")

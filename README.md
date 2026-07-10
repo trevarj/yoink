@@ -59,8 +59,9 @@ yoink --write-config    # writes config.toml; set mb_contact to a real email
 yoink                   # launch the TUI
 ```
 
-Keys: `/` search · `Enter` preview tracklist · `a` queue album · `x` remove ·
-`R` requeue failed · `m` resolve a flagged track · `r` refresh · `q` quit.
+Keys: `/` search · `Enter` preview tracklist · `a` queue album · `1` discover ·
+`2` queue · `x` remove · `R` requeue failed · `m` resolve a flagged track ·
+`r` refresh · `q` quit.
 
 ## Configuration
 
@@ -74,10 +75,15 @@ Keys: `/` search · `Enter` preview tracklist · `a` queue album · `x` remove �
 | `download_concurrency` | `3` | Parallel track downloads per album. Lower if throttled. |
 | `duration_gate_s` / `duration_soft_s` | `3` / `7` | Match duration tolerance vs the MusicBrainz track length. |
 | `min_match_score` | `6.0` | Below this, a track is flagged `needs_review`. |
+| `min_audio_bitrate` | `128.0` | Minimum kbps for an automatic match; `0` disables the quality probe. |
+| `strip_featured_artists` | `true` | Remove featured guests from track artist tags for consistent album grouping. |
+| `replaygain` | `true` | Write non-destructive R128 track and integrated album loudness tags. |
 | `music_dir` | `$XDG_MUSIC_DIR` or `~/Music` | Library output root. |
+| `state_dir` | `$XDG_STATE_HOME/yoink` | Durable queue, staging, beets library, and downloader archive root. |
+| `cache_dir` | `$XDG_CACHE_HOME/yoink` | Disposable MusicBrainz response and cover-art cache root. |
 
-State (queue DB, beets library, logs) lives under `$XDG_STATE_HOME/yoink`; cached
-MusicBrainz responses and cover art under `$XDG_CACHE_HOME/yoink`.
+All values are validated at startup; unknown keys and invalid types or ranges
+are reported as configuration errors.
 
 ## Development
 
