@@ -25,6 +25,15 @@ def _downloader(tmp_path: Path) -> Downloader:
     return Downloader(cfg)
 
 
+def _cookie_downloader(tmp_path: Path) -> Downloader:
+    cfg = Config(
+        state_dir=tmp_path,
+        cookies_from_browser="brave:/home/trev/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default",
+    )
+    cfg.staging_dir.mkdir(parents=True, exist_ok=True)
+    return Downloader(cfg)
+
+
 class _FakeYDL:
     """Stand-in for yt_dlp.YoutubeDL that yields a fixed info dict."""
 
@@ -70,6 +79,16 @@ def test_probe_picks_highest_tbr_audio_only(tmp_path):
     q = _downloader(tmp_path).probe_audio(VID)
     assert q == AudioQuality(
         video_id=VID, bitrate_kbps=256.0, ext="webm", acodec="opus", filesize=None
+    )
+
+
+def test_downloader_passes_browser_cookies_to_yt_dlp(tmp_path):
+    opts = _cookie_downloader(tmp_path)._opts(None)
+    assert opts["cookiesfrombrowser"] == (
+        "brave",
+        "/home/trev/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default",
+        None,
+        None,
     )
 
 

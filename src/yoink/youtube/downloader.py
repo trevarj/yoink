@@ -65,6 +65,7 @@ def _make_hook(cb: ProgressCb):
 
 class Downloader:
     def __init__(self, config: Config) -> None:
+        self.config = config
         self.staging = config.staging_dir
         self.codec = config.audio_codec
         self.staging.mkdir(parents=True, exist_ok=True)
@@ -102,6 +103,8 @@ class Downloader:
         }
         if progress_cb:
             opts["progress_hooks"] = [_make_hook(progress_cb)]
+        if (cookies := self.config.cookies_from_browser_options) is not None:
+            opts["cookiesfrombrowser"] = cookies
         return opts
 
     def probe_audio(self, video_id: str) -> AudioQuality | None:

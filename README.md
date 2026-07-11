@@ -72,6 +72,7 @@ Keys: `/` search · `Enter` preview tracklist · `a` queue album · `1` discover
 | `mb_contact` | — | Contact (email/URL) for the MusicBrainz User-Agent. Required by MB etiquette. |
 | `tagger` | `beets` | `beets` (canonical import) or `mutagen` (direct). |
 | `audio_codec` | `opus` | Codec yt-dlp extracts to. |
+| `cookies_from_browser` | unset | Optional yt-dlp browser-cookie source, using `BROWSER[+KEYRING][:PROFILE][::CONTAINER]`. |
 | `download_concurrency` | `3` | Parallel track downloads per album. Lower if throttled. |
 | `duration_gate_s` / `duration_soft_s` | `3` / `7` | Match duration tolerance vs the MusicBrainz track length. |
 | `min_match_score` | `6.0` | Below this, a track is flagged `needs_review`. |
@@ -84,6 +85,16 @@ Keys: `/` search · `Enter` preview tracklist · `a` queue album · `1` discover
 
 All values are validated at startup; unknown keys and invalid types or ranges
 are reported as configuration errors.
+
+For example, a Brave Flatpak profile can be used for YouTube authentication:
+
+```toml
+cookies_from_browser = "brave:/home/trev/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default"
+```
+
+This setting points yt-dlp at the browser cookie store; it does not copy cookies
+into Yoink's configuration.  Use an account/profile you are comfortable
+exposing to yt-dlp.
 
 ## Development
 

@@ -17,12 +17,21 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from platformdirs import PlatformDirs
+from yt_dlp.cookies import SUPPORTED_BROWSERS, SUPPORTED_KEYRINGS
 
 from . import __version__
 
 _dirs = PlatformDirs(appname="yoink", appauthor=False)
 
 _CODEC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+_COOKIES_FROM_BROWSER_RE = re.compile(
+    r"""(?x)
+    (?P<name>[^+:]+)
+    (?:\s*\+\s*(?P<keyring>[^:]+))?
+    (?:\s*:\s*(?!:)(?P<profile>.+?))?
+    (?:\s*::\s*(?P<container>.+))?
+    """
+)
 
 
 def _music_default() -> Path:
@@ -51,6 +60,10 @@ class Config:
     download_concurrency: int = 3
     # Preferred audio codec for extraction.
     audio_codec: str = "opus"
+    # Optional yt-dlp browser-cookie source.  This is the same syntax as
+    # --cookies-from-browser, e.g. "brave:/path/to/Brave-Browser/Default".
+    # The config stores only a browser/profile reference, never cookie data.
+    cookies_from_browser: str | None = None
     # Minimum audio bitrate (kbps) to accept a candidate; 0 disables the probe.
     # Default on so low-bitrate reuploads are flagged for review rather than
     # silently saved. The probe adds one extract_info round-trip per track.
@@ -96,6 +109,28 @@ class Config:
         ):
             raise ValueError("audio_codec must be a non-empty codec name")
 
+        if self.cookies_from_browser is not None:
+            if not isinstance(
+                self.cookies_from_browser, str
+            ) or not self.cookies_from_browser.strip():
+                raise ValueError("cookies_from_browser must be a non-empty string or null")
+            if not _COOKIES_FROM_BROWSER_RE.fullmatch(self.cookies_from_browser):
+                raise ValueError(
+                    "cookies_from_browser must use yt-dlp's "
+                    "BROWSER[+KEYRING][:PROFILE][::CONTAINER] syntax"
+                )
+            browser, _, keyring, _ = _cookies_from_browser_parts(
+                self.cookies_from_browser
+            )
+            if browser not in SUPPORTED_BROWSERS:
+                raise ValueError(
+                    f"unsupported browser for cookies_from_browser: {browser}"
+                )
+            if keyring is not None and keyring not in SUPPORTED_KEYRINGS:
+                raise ValueError(
+                    f"unsupported keyring for cookies_from_browser: {keyring.lower()}"
+                )
+
         if isinstance(self.min_audio_bitrate, bool) or not isinstance(
             self.min_audio_bitrate, (int, float)
         ):
@@ -138,6 +173,15 @@ class Config:
     def user_agent(self) -> str:
         return f"yoink/{__version__} ( {self.mb_contact} )"
 
+    @property
+    def cookies_from_browser_options(
+        self,
+    ) -> tuple[str, str | None, str | None, str | None] | None:
+        """Return ``cookiesfrombrowser`` in yt-dlp's Python API shape."""
+        if self.cookies_from_browser is None:
+            return None
+        return _cookies_from_browser_parts(self.cookies_from_browser)
+
     def ensure_dirs(self) -> None:
         for p in (
             self.state_dir,
@@ -153,6 +197,18 @@ class Config:
 
 def config_path() -> Path:
     return Path(_dirs.user_config_dir) / "config.toml"
+
+
+def _cookies_from_browser_parts(
+    value: str,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Parse a validated yt-dlp ``--cookies-from-browser`` value."""
+    match = _COOKIES_FROM_BROWSER_RE.fullmatch(value)
+    assert match is not None
+    browser, keyring, profile, container = match.group(
+        "name", "keyring", "profile", "container"
+    )
+    return browser.lower(), profile, keyring.upper() if keyring else None, container
 
 
 def load_config() -> Config:
@@ -172,6 +228,7 @@ def load_config() -> Config:
         "min_match_score",
         "download_concurrency",
         "audio_codec",
+        "cookies_from_browser",
         "min_audio_bitrate",
         "strip_featured_artists",
         "replaygain",
@@ -188,6 +245,7 @@ def load_config() -> Config:
         "min_match_score",
         "download_concurrency",
         "audio_codec",
+        "cookies_from_browser",
         "min_audio_bitrate",
         "strip_featured_artists",
         "replaygain",

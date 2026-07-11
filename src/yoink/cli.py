@@ -20,6 +20,11 @@ tagger = "beets"
 # Audio codec yt-dlp extracts to.
 audio_codec = "opus"
 
+# Optional browser cookie source for YouTube authentication.  This has the same
+# syntax as yt-dlp's --cookies-from-browser option.  It stores only the profile
+# location, not cookies themselves.
+# cookies_from_browser = "brave:/home/you/.../Brave-Browser/Default"
+
 # Matching tolerances.
 duration_gate_s = 3.0
 duration_soft_s = 7.0

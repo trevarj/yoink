@@ -18,6 +18,10 @@ from yoink.config import Config
         ({"download_concurrency": 0}, "download_concurrency"),
         ({"download_concurrency": 1.5}, "download_concurrency"),
         ({"audio_codec": ""}, "audio_codec"),
+        ({"cookies_from_browser": ""}, "cookies_from_browser"),
+        ({"cookies_from_browser": ":/profile"}, "cookies_from_browser"),
+        ({"cookies_from_browser": "netscape:/profile"}, "unsupported browser"),
+        ({"cookies_from_browser": "brave+notakeyring:/profile"}, "unsupported keyring"),
         ({"min_audio_bitrate": -1}, "min_audio_bitrate"),
         ({"strip_featured_artists": "yes"}, "strip_featured_artists"),
         ({"replaygain": 1}, "replaygain"),
@@ -46,9 +50,29 @@ def test_load_config_requires_path_strings(monkeypatch, tmp_path: Path):
         configmod.load_config()
 
 
+def test_load_config_parses_cookies_from_browser(monkeypatch, tmp_path: Path):
+    path = tmp_path / "config.toml"
+    browser_profile = (
+        "/home/trev/.var/app/com.brave.Browser/config/"
+        "BraveSoftware/Brave-Browser/Default"
+    )
+    path.write_text(
+        f'cookies_from_browser = "brave:{browser_profile}"\n'
+    )
+    monkeypatch.setattr(configmod, "config_path", lambda: path)
+
+    assert configmod.load_config().cookies_from_browser_options == (
+        "brave",
+        browser_profile,
+        None,
+        None,
+    )
+
+
 def test_sample_config_covers_operational_settings():
     for key in (
         "min_audio_bitrate",
+        "cookies_from_browser",
         "strip_featured_artists",
         "replaygain",
         "state_dir",
