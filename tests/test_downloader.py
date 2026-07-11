@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,12 @@ def _cookie_downloader(tmp_path: Path) -> Downloader:
         state_dir=tmp_path,
         cookies_from_browser="brave:/home/trev/.var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default",
     )
+    cfg.staging_dir.mkdir(parents=True, exist_ok=True)
+    return Downloader(cfg)
+
+
+def _cli_downloader(tmp_path: Path) -> Downloader:
+    cfg = Config(state_dir=tmp_path, yt_dlp_command="ytdl")
     cfg.staging_dir.mkdir(parents=True, exist_ok=True)
     return Downloader(cfg)
 
@@ -90,6 +97,65 @@ def test_downloader_passes_browser_cookies_to_yt_dlp(tmp_path):
         None,
         None,
     )
+
+
+def test_cli_probe_parses_selected_audio(monkeypatch, tmp_path):
+    seen: list[str] = []
+
+    def run(command, **_kwargs):
+        seen.extend(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="__YOINK_PROBE__\t251\topus\twebm\t160\tNA\t123\tNA\n",
+        )
+
+    monkeypatch.setattr(dlmod.subprocess, "run", run)
+    assert _cli_downloader(tmp_path).probe_audio(VID) == AudioQuality(
+        video_id=VID, bitrate_kbps=160.0, ext="webm", acodec="opus", filesize=123
+    )
+    assert seen[0] == "ytdl"
+    assert "--skip-download" in seen
+    assert "--format" in seen
+
+
+def test_cli_progress_reports_fraction():
+    seen: list[tuple[float | None, str]] = []
+
+    def progress(fraction: float | None, status: str) -> None:
+        seen.append((fraction, status))
+
+    Downloader._emit_cli_progress(
+        "__YOINK_PROGRESS__\t25\t100\tNA\n", progress
+    )
+    assert seen == [(0.25, "downloading")]
+
+
+def test_cli_download_uses_wrapper_and_reports_progress(monkeypatch, tmp_path):
+    seen: list[tuple[float | None, str]] = []
+
+    class Process:
+        def __init__(self, command, **_kwargs) -> None:
+            self.command = command
+            output = Path(command[command.index("--output") + 1])
+            Path(str(output).replace("%(ext)s", "opus")).write_bytes(b"audio")
+            self.stdout = iter(["__YOINK_PROGRESS__\t25\t100\tNA\n"])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> None:
+            return None
+
+        def wait(self) -> int:
+            return 0
+
+    monkeypatch.setattr(dlmod.subprocess, "Popen", Process)
+    path = _cli_downloader(tmp_path).download(
+        VID, lambda fraction, status: seen.append((fraction, status))
+    )
+    assert path.exists()
+    assert path.suffix == ".opus"
+    assert seen == [(0.25, "downloading"), (1.0, "processing")]
 
 
 def test_probe_uses_the_format_selected_by_yt_dlp(tmp_path):

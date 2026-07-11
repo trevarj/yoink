@@ -73,6 +73,7 @@ Keys: `/` search · `Enter` preview tracklist · `a` queue album · `1` discover
 | `tagger` | `beets` | `beets` (canonical import) or `mutagen` (direct). |
 | `audio_codec` | `opus` | Codec yt-dlp extracts to. |
 | `cookies_from_browser` | unset | Optional yt-dlp browser-cookie source, using `BROWSER[+KEYRING][:PROFILE][::CONTAINER]`. |
+| `yt_dlp_command` | unset | Optional external yt-dlp command (for example `ytdl`); when set, its yt-dlp configuration is used. |
 | `download_concurrency` | `3` | Parallel track downloads per album. Lower if throttled. |
 | `duration_gate_s` / `duration_soft_s` | `3` / `7` | Match duration tolerance vs the MusicBrainz track length. |
 | `min_match_score` | `6.0` | Below this, a track is flagged `needs_review`. |
@@ -95,6 +96,13 @@ cookies_from_browser = "brave:/home/trev/.var/app/com.brave.Browser/config/Brave
 This setting points yt-dlp at the browser cookie store; it does not copy cookies
 into Yoink's configuration.  Use an account/profile you are comfortable
 exposing to yt-dlp.
+
+If a wrapper provides a working JavaScript runtime and yt-dlp plugins, use it
+instead of Yoink's embedded API:
+
+```toml
+yt_dlp_command = "ytdl"
+```
 
 ## Development
 

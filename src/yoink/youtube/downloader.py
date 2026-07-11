@@ -14,6 +14,7 @@ renames into the final library tree.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,8 @@ from ..config import Config
 ProgressCb = Callable[[float | None, str], None]
 
 _NON_AUDIO_SUFFIXES = {"webp", "jpg", "jpeg", "png", "part", "ytdl", "tmp"}
+_CLI_PROBE_PREFIX = "__YOINK_PROBE__\t"
+_CLI_PROGRESS_PREFIX = "__YOINK_PROGRESS__\t"
 
 
 class DownloadError(Exception):
@@ -114,6 +117,9 @@ class Downloader:
         crash on a probe; treat None as "unknown quality" (proceed, don't
         reject).
         """
+        if self.config.yt_dlp_command:
+            return self._probe_audio_cli(video_id)
+
         opts = self._opts(None)
         opts["skip_download"] = True
         opts["quiet"] = True
@@ -155,6 +161,9 @@ class Downloader:
 
     def download(self, video_id: str, progress_cb: ProgressCb | None = None) -> Path:
         """Download + extract one track. Returns the staged audio file path."""
+        if self.config.yt_dlp_command:
+            return self._download_cli(video_id, progress_cb)
+
         url = f"https://music.youtube.com/watch?v={video_id}"
         # Multiple album tracks can intentionally resolve to one video. Give
         # every invocation its own files (including thumbnail/temporary files)
@@ -168,6 +177,144 @@ class Downloader:
         if rc != 0:
             raise DownloadError(f"yt-dlp returned {rc} for {video_id}")
         return self._locate(output_stem)
+
+    def _cli_common_args(self) -> list[str]:
+        """Arguments Yoink owns even when yt-dlp is supplied by a wrapper."""
+        args = [
+            "--no-playlist",
+            "--format",
+            "bestaudio/best",
+            "--format-sort",
+            f"acodec:{self.codec},abr",
+            "--socket-timeout",
+            "30",
+            "--retries",
+            "3",
+            "--fragment-retries",
+            "3",
+            "--extractor-retries",
+            "2",
+        ]
+        if self.config.cookies_from_browser:
+            args.extend(["--cookies-from-browser", self.config.cookies_from_browser])
+        return args
+
+    def _cli_command(self, *args: str) -> list[str]:
+        assert self.config.yt_dlp_command is not None
+        # A command name/path is one argv element.  Do not split or execute it
+        # through a shell: user configuration must not become shell syntax.
+        return [self.config.yt_dlp_command, *args]
+
+    def _probe_audio_cli(self, video_id: str) -> AudioQuality | None:
+        command = self._cli_command(
+            *self._cli_common_args(),
+            "--skip-download",
+            "--no-warnings",
+            "--print",
+            _CLI_PROBE_PREFIX
+            + "%(format_id)s\t%(acodec)s\t%(ext)s\t%(tbr)s\t%(abr)s"
+            + "\t%(filesize)s\t%(filesize_approx)s",
+            f"https://music.youtube.com/watch?v={video_id}",
+        )
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+        except OSError:
+            return None
+        if result.returncode != 0:
+            return None
+        for line in reversed(result.stdout.splitlines()):
+            if line.startswith(_CLI_PROBE_PREFIX):
+                return self._parse_cli_probe(video_id, line.removeprefix(_CLI_PROBE_PREFIX))
+        return None
+
+    @staticmethod
+    def _parse_cli_probe(video_id: str, payload: str) -> AudioQuality | None:
+        fields = payload.split("\t")
+        if len(fields) != 7:
+            return None
+        _, acodec, ext, tbr, abr, filesize, filesize_approx = fields
+
+        def number(value: str) -> float | None:
+            try:
+                return float(value) if value not in {"", "NA"} else None
+            except ValueError:
+                return None
+
+        def size(value: str) -> int | None:
+            try:
+                return int(value) if value not in {"", "NA"} else None
+            except ValueError:
+                return None
+
+        return AudioQuality(
+            video_id=video_id,
+            bitrate_kbps=number(tbr) or number(abr),
+            ext=ext or None,
+            acodec=acodec or None,
+            filesize=size(filesize) or size(filesize_approx),
+        )
+
+    def _download_cli(self, video_id: str, progress_cb: ProgressCb | None) -> Path:
+        output_stem = f"{video_id}-{uuid4().hex}"
+        command = self._cli_command(
+            *self._cli_common_args(),
+            "--no-warnings",
+            "--newline",
+            "--progress-template",
+            "download:"
+            + _CLI_PROGRESS_PREFIX
+            + "%(progress.downloaded_bytes)s\t%(progress.total_bytes)s"
+            + "\t%(progress.total_bytes_estimate)s",
+            "--output",
+            str(self.staging / f"{output_stem}.%(ext)s"),
+            "--write-thumbnail",
+            "--sponsorblock-remove",
+            "music_offtopic",
+            "--extract-audio",
+            "--audio-format",
+            self.codec,
+            "--embed-metadata",
+            "--embed-thumbnail",
+            f"https://music.youtube.com/watch?v={video_id}",
+        )
+        output: list[str] = []
+        try:
+            with subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            ) as proc:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    output.append(line.rstrip())
+                    self._emit_cli_progress(line, progress_cb)
+                rc = proc.wait()
+        except OSError as e:
+            raise DownloadError(f"could not run {self.config.yt_dlp_command}: {e}") from e
+        if rc != 0:
+            detail = "\n".join(line for line in output[-20:] if line)
+            raise DownloadError(detail or f"yt-dlp returned {rc} for {video_id}")
+        if progress_cb:
+            progress_cb(1.0, "processing")
+        return self._locate(output_stem)
+
+    @staticmethod
+    def _emit_cli_progress(line: str, progress_cb: ProgressCb | None) -> None:
+        if not progress_cb or not line.startswith(_CLI_PROGRESS_PREFIX):
+            return
+        values = line.removeprefix(_CLI_PROGRESS_PREFIX).strip().split("\t")
+        if len(values) != 3:
+            return
+        try:
+            got = float(values[0])
+            total = next(float(value) for value in values[1:] if value not in {"", "NA"})
+        except (StopIteration, ValueError):
+            progress_cb(None, "downloading")
+            return
+        progress_cb(got / total if total else None, "downloading")
 
     def _locate(self, output_stem: str) -> Path:
         preferred = self.staging / f"{output_stem}.{self.codec}"

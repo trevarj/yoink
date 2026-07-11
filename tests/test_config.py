@@ -22,6 +22,7 @@ from yoink.config import Config
         ({"cookies_from_browser": ":/profile"}, "cookies_from_browser"),
         ({"cookies_from_browser": "netscape:/profile"}, "unsupported browser"),
         ({"cookies_from_browser": "brave+notakeyring:/profile"}, "unsupported keyring"),
+        ({"yt_dlp_command": ""}, "yt_dlp_command"),
         ({"min_audio_bitrate": -1}, "min_audio_bitrate"),
         ({"strip_featured_artists": "yes"}, "strip_featured_artists"),
         ({"replaygain": 1}, "replaygain"),
@@ -58,6 +59,7 @@ def test_load_config_parses_cookies_from_browser(monkeypatch, tmp_path: Path):
     )
     path.write_text(
         f'cookies_from_browser = "brave:{browser_profile}"\n'
+        'yt_dlp_command = "ytdl"\n'
     )
     monkeypatch.setattr(configmod, "config_path", lambda: path)
 
@@ -67,12 +69,14 @@ def test_load_config_parses_cookies_from_browser(monkeypatch, tmp_path: Path):
         None,
         None,
     )
+    assert configmod.load_config().yt_dlp_command == "ytdl"
 
 
 def test_sample_config_covers_operational_settings():
     for key in (
         "min_audio_bitrate",
         "cookies_from_browser",
+        "yt_dlp_command",
         "strip_featured_artists",
         "replaygain",
         "state_dir",

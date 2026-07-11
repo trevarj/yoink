@@ -25,6 +25,10 @@ audio_codec = "opus"
 # location, not cookies themselves.
 # cookies_from_browser = "brave:/home/you/.../Brave-Browser/Default"
 
+# Optional external command for yt-dlp.  Set this to a wrapper such as "ytdl"
+# when it provides the JavaScript runtime/plugins required by YouTube.
+# yt_dlp_command = "ytdl"
+
 # Matching tolerances.
 duration_gate_s = 3.0
 duration_soft_s = 7.0

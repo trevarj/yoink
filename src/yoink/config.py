@@ -64,6 +64,10 @@ class Config:
     # --cookies-from-browser, e.g. "brave:/path/to/Brave-Browser/Default".
     # The config stores only a browser/profile reference, never cookie data.
     cookies_from_browser: str | None = None
+    # Optional external yt-dlp command.  When set, Yoink invokes this command
+    # instead of the embedded Python API, allowing a wrapper such as ``ytdl``
+    # to provide its own Guix environment and yt-dlp configuration.
+    yt_dlp_command: str | None = None
     # Minimum audio bitrate (kbps) to accept a candidate; 0 disables the probe.
     # Default on so low-bitrate reuploads are flagged for review rather than
     # silently saved. The probe adds one extract_info round-trip per track.
@@ -130,6 +134,11 @@ class Config:
                 raise ValueError(
                     f"unsupported keyring for cookies_from_browser: {keyring.lower()}"
                 )
+
+        if self.yt_dlp_command is not None and (
+            not isinstance(self.yt_dlp_command, str) or not self.yt_dlp_command.strip()
+        ):
+            raise ValueError("yt_dlp_command must be a non-empty command string or null")
 
         if isinstance(self.min_audio_bitrate, bool) or not isinstance(
             self.min_audio_bitrate, (int, float)
@@ -229,6 +238,7 @@ def load_config() -> Config:
         "download_concurrency",
         "audio_codec",
         "cookies_from_browser",
+        "yt_dlp_command",
         "min_audio_bitrate",
         "strip_featured_artists",
         "replaygain",
@@ -246,6 +256,7 @@ def load_config() -> Config:
         "download_concurrency",
         "audio_codec",
         "cookies_from_browser",
+        "yt_dlp_command",
         "min_audio_bitrate",
         "strip_featured_artists",
         "replaygain",
