@@ -26,15 +26,14 @@ build-backend = "hatchling.build"
 packages = ["src/yoink"]
 
 [dependency-groups]
-# ruff is intentionally NOT here: its PyPI wheel is a standalone ELF binary
-# whose hardcoded loader doesn't exist on Guix System. Use Guix's ruff instead
-# (it's in manifest.scm): `guix shell ruff -- ruff check src tests`.
+# Ruff comes from the pinned Guix or Nix development environment rather than
+# the Python dependency set.
 dev = [
     "pytest>=8.0",
 ]
 
 [tool.uv]
-# Guix-provided CPython only; uv's prebuilt FHS pythons won't run on Guix System.
+# Use the interpreter supplied by the pinned development environment.
 python-downloads = "never"
 
 [tool.ruff]
